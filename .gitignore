@@ -1,6 +1,9 @@
 # Plaintext dashboard data — never commit
-data.json
-canvas-source.*
 *.plain.json
-node_modules/
 .env
+canvas-source.*
+data.json
+market-symbols.json
+market.json
+node_modules/
+screenshots/

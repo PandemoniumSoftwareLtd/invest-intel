@@ -1,4 +1,5 @@
 // Usage: DASHBOARD_PASSCODE=… node build.mjs [data.json] [--new-salt]
+// Also merges market.json (from scripts/fetch-market-data.mjs) and publish.json ({"schedule": "..."}) if present.
 // Encrypts data.json (AES-256-GCM, key = PBKDF2-SHA256 of the passcode) into site/data.enc.json
 // and copies the static app shell into site/. The passcode is read ONLY from the environment
 // and is never printed, logged or written to disk.
@@ -11,8 +12,12 @@ const OUT = "site", SRC = "src", ITER = 600000;
 const pass = process.env.DASHBOARD_PASSCODE;
 if (!pass) { console.error("DASHBOARD_PASSCODE is not set; refusing to build."); process.exit(1); }
 
-const plain = fs.readFileSync(dataPath, "utf8");
-JSON.parse(plain); // validate
+const base0 = JSON.parse(fs.readFileSync(dataPath, "utf8"));
+if (fs.existsSync("market.json")) base0.market = JSON.parse(fs.readFileSync("market.json", "utf8"));
+else console.warn("market.json not found: building without price history/fundamentals");
+base0.publish = fs.existsSync("publish.json") ? JSON.parse(fs.readFileSync("publish.json", "utf8")) : { schedule: "Weekdays ~7:00 UK" };
+base0.builtAt = new Date().toISOString();
+const plain = JSON.stringify(base0);
 
 // Reuse the existing random salt (so remembered devices stay unlocked across daily rebuilds)
 // unless --new-salt is passed or there is no previous build. A fresh random IV is used every build.
@@ -50,6 +55,7 @@ const probes = new Set();
 const d = JSON.parse(plain);
 for (const i of d.ideas) { probes.add(i.name); probes.add(i.thesis.slice(0, 30)); }
 probes.add(d.asOf);
+for (const a of Object.values(d.market?.assets || {})) { if (a.liveUrl) probes.add(a.liveUrl); if (a.stats?.url) probes.add(a.stats.url); }
 const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]);
 for (const f of walk(OUT)) {
   if (f.endsWith(".png")) continue;
