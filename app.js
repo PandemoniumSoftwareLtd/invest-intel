@@ -3,6 +3,7 @@
 // the key is derived in-browser from the passcode with PBKDF2-SHA256.
 (() => {
   const $ = (s) => document.querySelector(s);
+  const $$ = (s) => [...document.querySelectorAll(s)];
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
   const enc = new TextEncoder();
@@ -86,6 +87,7 @@
     // drop every decrypted object from memory before reloading
     try { if (AU.ctl) AU.ctl.abort(); } catch {}
     P = null; A = null; AU.draft = ""; IMP = null; D = null; pending = null;
+    try { if (SHOTS.ctl) SHOTS.ctl.abort(); } catch {} dropShots();
     const v = $("#view"); if (v) v.innerHTML = ""; closeSheet();
     await clearKey(); currentKey = null; location.reload();
   }
@@ -595,7 +597,7 @@
     const byName = nm ? D.ideas.find((i) => nameKeys(i).some((k) => nm.includes(k))) : null;
     const s = normSym(h.sym);
     for (const i of SYMIDX.get(s) || []) {
-      // a bare symbol can collide across exchanges (e.g. BA = Boeing in the US, BA. = BAE in London): require a matching currency or name
+      // a bare symbol can collide across exchanges (e.g. the same short ticker on a US and a London listing): require a matching currency or name
       if (pxOk(i)) return { i, by: "symbol", px: true };
       if (byName === i) return { i, by: "symbol", px: false };
     }
@@ -754,6 +756,18 @@
     return null;
   }
   function computeImport() {
+    if (IMP.kind === "shots") {
+      const out = [], today = new Date().toISOString().slice(0, 10); let ignored = 0;
+      for (const r of IMP.rows) {
+        const sym = String(r.sym || "").trim(), name = String(r.name || "").trim(); if (!sym && !name) { ignored++; continue; }
+        const q = toNum(r.qty), avg = toNum(r.avg), price = toNum(r.price), value = toNum(r.value), book = toNum(r.book), c = normCcy(r.ccy) || IMP.defCcy;
+        if ((q == null || q <= 0) && value == null) { ignored++; continue; }
+        const h = { sym, name: name || sym, qty: q != null && q > 0 ? q : null, ccy: c, avg, book, bookCcy: c };
+        if (value != null) { h.value = value; h.valueCcy = c; h.valueAsOf = today; } else if (price != null && h.qty != null) { h.value = +(price * h.qty).toFixed(4); h.valueCcy = c; h.valueAsOf = today; }
+        out.push(h);
+      }
+      return { holdings: out, isTx: false, used: out.length, ignored };
+    }
     const I = IMP, m = I.map, col = (r, f) => (m[f] != null && m[f] >= 0 ? r[m[f]] : null), N = (r, f) => num(col(r, f), I.delim);
     const hc = (f) => (m[f] != null && m[f] >= 0 ? hint(I.headers[m[f]]) : null);
     const rowCcy = (r) => normCcy(col(r, "ccy")) || I.defCcy;
@@ -843,6 +857,7 @@
   function initSheet() {
     const w = $("#sheet");
     w.onclick = (e) => { if (e.target === w || e.target.closest("[data-close]")) { closeSheet(); return; } onSheetClick(e); };
+    initShotEvents();
     w.onchange = onSheetChange; w.oninput = onSheetInput; w.onsubmit = (e) => { e.preventDefault(); onSheetSubmit(e.target.closest("form")); };
   }
   function openSheet(kind, data) {
@@ -852,6 +867,8 @@
   }
   function closeSheet(instant) {
     const w = $("#sheet"); if (!w || w.hidden) return; w.classList.remove("in"); document.body.classList.remove("sheet-open");
+    if (SHOTS.ctl) try { SHOTS.ctl.abort(); } catch {}
+    SHOTS.busy = false; dropShots(); if (IMP && IMP.kind === "shots") IMP = null;
     const done = () => { w.hidden = true; w.querySelector(".sheet").innerHTML = ""; sheetKind = null; sheetData = null; if (lastFocus && lastFocus.focus) try { lastFocus.focus({ preventScroll: true }); } catch {} };
     if (instant) done(); else setTimeout(done, 180);
   }
@@ -860,6 +877,8 @@
     const el = $("#sheet .sheet"); let h = "";
     if (sheetKind === "more") h = sheetHead("More") + `<div class="morelist">${OVERFLOW.map((v) => { const t = TABS.find((x) => x[0] === v); return `<button class="moreit${st.view === v ? " on" : ""}" data-tab-go="${v}"><span class="ic">${t[1]}</span>${esc(v)}<span class="chev">›</span></button>`; }).join("")}</div>`;
     else if (sheetKind === "import") h = importSheet();
+    else if (sheetKind === "shots") h = shotsSheet();
+    else if (sheetKind === "importChoose") h = importChooser();
     else if (sheetKind === "edit") h = editSheet();
     else if (sheetKind === "backup") h = backupSheet();
     else if (sheetKind === "restorepass") h = sheetHead("Backup passcode") + `<form class="shb" data-form="restorepass"><p class="muted small">This backup was encrypted with a different passcode (or before a passcode change). Enter the passcode it was made with.</p>
@@ -867,14 +886,215 @@
       <div class="shf"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">Open backup</button></div></form>`;
     else if (sheetKind === "restore") h = restoreSheet();
     else if (sheetKind === "context") h = sheetHead("What the analyst sees", `Sent to ${esc(PROVIDERS[A.cfg.provider].label)} with your next message`) + `<div class="shb"><div class="tk">${(sheetData.length / 1000).toFixed(1)}k characters (≈${Math.round(sheetData.length / 3.8 / 1000)}k tokens)</div><pre class="ctxpre">${esc(sheetData)}</pre></div>`;
-    el.innerHTML = h;
+    el.innerHTML = h; el.classList.toggle("wide", sheetKind === "import" && !!IMP && IMP.kind === "shots");
+    if (sheetKind === "shots") for (const i of SHOTS.imgs) { const t = el.querySelector(`[data-thumb="${i.id}"]`); if (t && i.thumb) t.prepend(i.thumb); }
     el.querySelectorAll("[data-w]").forEach((x) => { x.style.width = x.dataset.w + "%"; });
   }
   function openMore() { openSheet("more"); }
 
+  // =====================================================================================
+  // Import from screenshots. Images are downscaled on the device (canvas → JPEG), sent once to the
+  // user's chosen AI provider to read the holdings, and then dropped. They are never written to
+  // IndexedDB, localStorage, Cache Storage or GitHub.
+  // =====================================================================================
+  const SHOTS = { imgs: [], busy: false, ctl: null, err: "", drag: false };
+  const MAX_SHOTS = 8, MAX_EDGE = 1600;
+  const VISION_FALLBACK = { anthropic: "claude-sonnet-5-5", openai: "gpt-6.1-sol", xai: "grok-4.7" };
+  function dropShots() { for (const i of SHOTS.imgs) { i.data = null; if (i.thumb) { i.thumb.width = 0; i.thumb.height = 0; } } SHOTS.imgs = []; SHOTS.err = ""; SHOTS.drag = false; }
+  async function decodeImage(file) {
+    try { const bm = await createImageBitmap(file); return { src: bm, w: bm.width, h: bm.height, done: () => bm.close && bm.close() }; } catch {}
+    // fallback for browsers whose createImageBitmap can't take this type (img-src allows blob: for this only)
+    const url = URL.createObjectURL(file); const img = new Image(); img.src = url;
+    try { await img.decode(); } catch (e) { URL.revokeObjectURL(url); throw e; }
+    return { src: img, w: img.naturalWidth, h: img.naturalHeight, done: () => URL.revokeObjectURL(url) };
+  }
+  async function shrink(file) {
+    const d = await decodeImage(file);
+    try {
+      const sc = Math.min(1, MAX_EDGE / Math.max(d.w, d.h)), w = Math.max(1, Math.round(d.w * sc)), h = Math.max(1, Math.round(d.h * sc));
+      const c = document.createElement("canvas"); c.width = w; c.height = h; const x = c.getContext("2d");
+      x.fillStyle = "#fff"; x.fillRect(0, 0, w, h); x.imageSmoothingQuality = "high"; x.drawImage(d.src, 0, 0, w, h);
+      const data = c.toDataURL("image/jpeg", 0.85).split(",")[1];
+      const ts = Math.min(1, 220 / Math.max(w, h)), t = document.createElement("canvas"); t.width = Math.round(w * ts); t.height = Math.round(h * ts);
+      t.getContext("2d").drawImage(c, 0, 0, t.width, t.height); c.width = 0; c.height = 0;
+      return { id: uid(), name: file.name || "Pasted image", w, h, data, thumb: t, kb: Math.round(data.length * 0.75 / 1024) };
+    } finally { d.done(); }
+  }
+  const isImageFile = (f) => f && (/^image\//.test(f.type) || /\.(png|jpe?g|heic|heif|webp|gif)$/i.test(f.name || ""));
+  async function addShots(files) {
+    SHOTS.err = "";
+    for (const f of files) {
+      if (!isImageFile(f)) { SHOTS.err = `${f.name || "That file"} isn't an image.`; continue; }
+      if (SHOTS.imgs.length >= MAX_SHOTS) { SHOTS.err = `Up to ${MAX_SHOTS} screenshots at a time. Import these, then add the rest.`; break; }
+      if (f.size > 40e6) { SHOTS.err = `${f.name} is too large.`; continue; }
+      try { SHOTS.imgs.push(await shrink(f)); }
+      catch { SHOTS.err = `Couldn't open ${f.name || "an image"}${/hei[cf]/i.test((f.type || "") + (f.name || "")) ? ". This browser can't decode HEIC; in Photos use Share → Save as JPEG, or take a screenshot (PNG) instead" : ""}.`; }
+    }
+    if (sheetKind === "shots") paintSheet();
+  }
+  async function pickShots() {
+    const fs = await filePick("image/*,.png,.jpg,.jpeg,.heic,.heif", true); if (fs && fs.length) await addShots(fs);
+  }
+  const SHOT_PROMPT = `You extract investment holdings from screenshots of brokerage, investing or portfolio-tracker apps.
+Return ONLY one JSON object (no prose, no code fences) with this shape:
+{"broker": string|null, "holdings": [{"name": string|null, "symbol": string|null, "quantity": number|null, "avgCost": number|null, "price": number|null, "value": number|null, "costTotal": number|null, "currency": string|null, "account": string|null, "confidence": number, "uncertain": [string], "image": number}], "unreadable": [string], "notes": string|null}
+Rules:
+- Copy numbers exactly as shown, as plain JSON numbers (no currency symbols, no thousands separators). If a field is not visible, use null. Never estimate, compute or infer a missing number (for example, do not derive quantity from value and price).
+- "symbol" only when a ticker is visibly shown; otherwise null. Do not look tickers up.
+- "currency": ISO code of the price/value as displayed (GBP, USD, EUR, ...). Use "GBp" when prices are shown in pence.
+- "value" = current market value of the position; "price" = current price per unit; "avgCost" = average cost per unit; "costTotal" = total invested / book cost, if shown.
+- "broker": the app or broker name only if visible (logo or title). "account": account type if visible (ISA, SIPP, GIA, ...).
+- "confidence": 0 to 1 for how sure you are this row is read correctly. "uncertain": names of fields that are blurry, cut off or ambiguous (use the field names above).
+- If the same holding appears in more than one screenshot (overlapping scroll captures), include it once.
+- Ignore cash balances, portfolio totals, watchlists, news, ads and charts. Describe anything you could not read in "unreadable".
+- "image": 1-based index of the screenshot the row came from.`;
+  function visionMessages(provider, imgs) {
+    const text = `${imgs.length} screenshot${imgs.length > 1 ? "s" : ""} of my portfolio. Extract the holdings as JSON.`;
+    const url = (i) => "data:image/jpeg;base64," + i.data;
+    if (provider === "anthropic") return [{ role: "user", content: [...imgs.map((i) => ({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: i.data } })), { type: "text", text }] }];
+    if (provider === "xai") return [{ role: "user", content: [...imgs.map((i) => ({ type: "input_image", image_url: url(i), detail: "high" })), { type: "input_text", text }] }];
+    return [{ role: "user", content: [...imgs.map((i) => ({ type: "image_url", image_url: { url: url(i), detail: "high" } })), { type: "text", text }] }];
+  }
+  function parseJsonLoose(t) {
+    t = String(t || "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+    const a = t.indexOf("{"), b = t.lastIndexOf("}"); if (a < 0 || b < a) throw new Error("The AI didn't return holdings data. Try clearer screenshots or another model.");
+    try { return JSON.parse(t.slice(a, b + 1)); } catch { throw new Error("The AI's answer wasn't valid JSON. Try again."); }
+  }
+  const NUMF = [["qty", "quantity", "Quantity"], ["avg", "avgCost", "Avg cost"], ["price", "price", "Price"], ["value", "value", "Value"], ["book", "costTotal", "Book cost"]];
+  const toNum = (v) => (v == null || v === "" ? null : typeof v === "number" ? (isFinite(v) ? v : null) : num(String(v)));
+  function shotRows(j) {
+    const rows = (Array.isArray(j.holdings) ? j.holdings : []).map((h) => {
+      const r = { sym: String(h.symbol || "").trim(), name: String(h.name || "").trim(), ccy: normCcy(h.currency) || "", acct: String(h.account || "").trim(),
+        conf: Math.max(0, Math.min(1, Number(h.confidence) >= 0 ? Number(h.confidence) : 0.5)), img: [h.image].filter(Boolean), flags: [] };
+      const unc = new Set((Array.isArray(h.uncertain) ? h.uncertain : []).map(String));
+      r.unc = []; for (const [k, src] of NUMF) { r[k] = toNum(h[src]); if (unc.has(src)) r.unc.push(k); }
+      if (unc.has("symbol")) r.unc.push("sym"); if (unc.has("name")) r.unc.push("name"); if (unc.has("currency")) r.unc.push("ccy");
+      return r;
+    }).filter((r) => r.sym || r.name);
+    // merge duplicates across screenshots (same symbol/name and account)
+    const key = (r) => (normSym(r.sym) || r.name.toLowerCase().replace(/\b(plc|inc|corp|corporation|ltd|limited|ag|sa|nv|se|group|holdings|the|ordinary|shares?|adr|class [a-z])\b|[^a-z0-9]/g, "")) + "|" + r.acct.toLowerCase();
+    const out = [];
+    for (const r of rows) {
+      const e = out.find((x) => x._k === key(r)); if (!e) { out.push({ ...r, _k: key(r) }); continue; }
+      for (const [k, , lbl] of NUMF) {
+        if (e[k] == null && r[k] != null) e[k] = r[k];
+        else if (e[k] != null && r[k] != null && Math.abs(e[k] - r[k]) > 1e-9 * Math.max(1, Math.abs(e[k]))) { e.flags.push(`${lbl} differs between screenshots (${e[k]} vs ${r[k]})`); if (!e.unc.includes(k)) e.unc.push(k); if (r.conf > e.conf) e[k] = r[k]; }
+      }
+      for (const k of ["sym", "name", "ccy"]) if (!e[k] && r[k]) e[k] = r[k];
+      e.conf = Math.min(e.conf, r.conf); e.img = [...new Set([...e.img, ...r.img])];
+    }
+    for (const r of out) {
+      if (r.qty == null) r.flags.push("Quantity not visible: add it, or the holding is valued from the screenshot value only");
+      if (r.value == null && r.price == null) r.flags.push("No price or value visible (the dashboard price is used if it matches an idea)");
+      delete r._k;
+    }
+    return out;
+  }
+  async function readShots() {
+    if (SHOTS.busy || !SHOTS.imgs.length || !aiReady()) return;
+    const base = curCfg(); SHOTS.busy = true; SHOTS.err = ""; SHOTS.ctl = new AbortController(); paintSheet();
+    const n = SHOTS.imgs.length; let used = base.model, text = "";
+    const run = async (cfg) => { text = ""; for await (const t of streamChat(cfg, SHOT_PROMPT, visionMessages(cfg.provider, SHOTS.imgs), SHOTS.ctl.signal, 16000)) text += t; };
+    try {
+      try { await run(base); }
+      catch (e) {
+        const fb = VISION_FALLBACK[base.provider];
+        if (e.name !== "AbortError" && (e.status === 400 || e.status === 404 || e.status === 422) && base.model !== fb && /image|vision|multimodal|modalit|model|input/i.test(e.message)) { used = fb; await run({ ...base, model: fb }); }
+        else throw e;
+      }
+      const j = parseJsonLoose(text), rows = shotRows(j);
+      dropShots(); // images are discarded as soon as they have been read
+      if (!rows.length) throw new Error("No holdings were found in those screenshots." + (j.unreadable && j.unreadable.length ? " Unreadable: " + j.unreadable.slice(0, 3).join("; ") : ""));
+      const broker = String(j.broker || "").trim().slice(0, 40);
+      IMP = { kind: "shots", fileName: `${n} screenshot${n > 1 ? "s" : ""}`, rows, unreadable: (Array.isArray(j.unreadable) ? j.unreadable : []).map(String).slice(0, 10), notes: j.notes ? String(j.notes).slice(0, 300) : "",
+        fmt: `Read by ${PROVIDERS[base.provider].label} · ${used}${used !== base.model ? " (vision fallback)" : ""}`, defCcy: P.base === "GBP" ? "GBP" : P.base, mode: P.holdings.length ? "add" : "replace",
+        acct: (broker || "Screenshots") + (rows[0].acct && rows.every((r) => r.acct === rows[0].acct) ? " " + rows[0].acct : ""), headers: [], data: [], map: {} };
+      SHOTS.busy = false; SHOTS.ctl = null; sheetKind = "import"; paintSheet();
+    } catch (e) {
+      SHOTS.busy = false; SHOTS.ctl = null;
+      SHOTS.err = e.name === "AbortError" ? "" : e.status || e instanceof TypeError ? errText(e, { ...base, model: used }) : e.message;
+      if (sheetKind === "shots") paintSheet();
+    }
+  }
+  function shotsSheet() {
+    const head = sheetHead("Import from screenshots", "Read holdings from your broker or tracker app");
+    if (!VS.ready || !A) return head + `<div class="shb">${vaultGate()}</div>`;
+    if (!aiReady()) return head + `<div class="shb"><div class="card gate"><div class="sgl" aria-hidden="true">✦</div><h3>Set up the AI analyst first</h3>
+      <p class="muted">Screenshots are read by the AI provider you choose (Anthropic, OpenAI or xAI) using your own API key, saved encrypted on this device.</p>
+      <button class="btn primary" data-sheet-act="goAI">Open AI settings</button></div>
+      <div class="privnote">Images are sent only to the provider you choose, are never stored, and are discarded after reading.</div>
+      <div class="shf"><button class="btn" data-close>Close</button></div></div>`;
+    const cc = curCfg(), pv = PROVIDERS[cc.provider], n = SHOTS.imgs.length, coarse = matchMedia("(pointer: coarse)").matches;
+    if (SHOTS.busy) return head + `<div class="shb"><div class="reading"><div class="spin" aria-hidden="true"></div><b>Reading ${n} screenshot${n > 1 ? "s" : ""} with ${esc(pv.label)}…</b>
+      <div class="tk">${esc(cc.model)} · usually 10–40 seconds</div></div><div class="thumbs">${SHOTS.imgs.map((i) => `<div class="thumb dim" data-thumb="${i.id}"></div>`).join("")}</div>
+      <div class="shf"><button class="btn" data-sheet-act="cancelRead">Cancel</button></div></div>`;
+    return head + `<div class="shb">
+      <div class="dropz${SHOTS.drag ? " over" : ""}" data-dropz><div class="dzi" aria-hidden="true"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-8 9"/></svg></div>
+        <b>${n ? "Add more screenshots" : "Add screenshots of your holdings"}</b>
+        <div class="tk">${coarse ? "From Photos or Files. Scroll captures are fine; overlaps are merged." : "Choose files, drag them here, or paste (⌘V). Overlapping scroll captures are merged."}</div>
+        <button class="btn primary" data-sheet-act="pickShots">${coarse ? "Choose photos" : "Choose images"}</button></div>
+      ${n ? `<div class="slbl">${n} of ${MAX_SHOTS} · ${SHOTS.imgs.reduce((a, i) => a + i.kb, 0)} KB after downscaling</div><div class="thumbs">${SHOTS.imgs.map((i, k) => `<div class="thumb" data-thumb="${i.id}"><span class="tn">${k + 1}</span><button class="tx" data-sheet-act="rmShot" data-id="${i.id}" aria-label="Remove screenshot ${k + 1}">✕</button></div>`).join("")}</div>` : ""}
+      <div class="privnote">🔒 Images are downscaled on this device and sent only to ${esc(pv.long)} (${esc(cc.model)}) to read the holdings. They are never saved (not on this device, not to GitHub) and are discarded as soon as they're read. Nothing is imported until you review and confirm.</div>
+      <p class="err" role="alert">${esc(SHOTS.err)}</p>
+      <div class="shf"><button class="btn" data-close>Cancel</button><button class="btn primary" data-sheet-act="readShots"${n ? "" : " disabled"}>Read ${n || ""} screenshot${n === 1 ? "" : "s"}</button></div></div>`;
+  }
+  function importChooser() {
+    return sheetHead("Import holdings", "Choose a source") + `<div class="shb">
+      <button class="srcopt" data-sheet-act="chooseCsv"><span class="soi">⇪</span><span><b>Broker CSV file</b><span class="tk">Trading 212, Freetrade, HL, AJ Bell, IBKR, Coinbase or any CSV</span></span><span class="chev">›</span></button>
+      <button class="srcopt" data-sheet-act="chooseShots"><span class="soi ai">✦</span><span><b>Screenshots</b><span class="tk">Photos of your app's holdings screen, read by your AI analyst. You review every row.</span></span><span class="chev">›</span></button>
+      <div class="privnote">🔒 Holdings are encrypted with your passcode on this device and never uploaded.</div></div>`;
+  }
+  // editable rows for screenshot imports (shown inside the normal import sheet)
+  function shotsPreview() {
+    const I = IMP, lc = (r, k) => (r.unc.includes(k) ? " lowc" : "");
+    const fld = (r, n, k, lbl) => { const v = r[k]; const miss = v == null || v === ""; return `<label class="ef${lc(r, k)}${miss && (k === "qty" || (k === "value" && r.price == null)) ? " miss" : ""}"><span>${lbl}</span><input data-ef="${k}" data-n="${n}" inputmode="decimal" value="${esc(v ?? "")}" placeholder="${miss ? "not visible" : ""}" autocomplete="off"></label>`; };
+    const cbadge = (c) => `<span class="conf ${c >= 0.85 ? "c-hi" : c >= 0.6 ? "c-mid" : "c-lo"}" title="AI confidence">${Math.round(c * 100)}%</span>`;
+    return `<datalist id="ideaSyms">${D.ideas.map((i) => `<option value="${esc(i.ticker.split(" / ")[0])}">${esc(i.name)}</option>`).join("")}</datalist>
+      <div class="erows">${I.rows.map((r, n) => { const mt = matchIdea(rowHolding(r));
+        return `<div class="erow${r.conf < 0.6 ? " lowr" : ""}" data-row="${n}"><div class="er1">
+          <label class="ef sym${lc(r, "sym")}"><span>Symbol</span><input data-ef="sym" data-n="${n}" value="${esc(r.sym)}" list="ideaSyms" placeholder="ticker" autocapitalize="characters" spellcheck="false" autocomplete="off"></label>
+          <label class="ef nm${lc(r, "name")}"><span>Name</span><input data-ef="name" data-n="${n}" value="${esc(r.name)}" autocomplete="off"></label>
+          <div class="erm">${cbadge(r.conf)}<span data-match="${n}">${mt ? pill(mt.i.ticker, ACTION_TONE[mt.i.action]) : `<span class="tk">no match</span>`}</span><button class="iconBtn sm" data-sheet-act="delRow" data-n="${n}" aria-label="Remove row">✕</button></div></div>
+          <div class="er2">${fld(r, n, "qty", "Quantity")}${fld(r, n, "avg", "Avg cost")}${fld(r, n, "price", "Price")}${fld(r, n, "value", "Value")}
+          <label class="ef${lc(r, "ccy")}"><span>Currency</span><select data-ef="ccy" data-n="${n}">${CCYS.map((c) => `<option${(r.ccy || I.defCcy) === c ? " selected" : ""}>${c}</option>`).join("")}</select></label></div>
+          ${r.flags.length ? `<div class="eflag">${r.flags.map((f) => `<div>⚠ ${esc(f)}</div>`).join("")}</div>` : ""}${r.img.length ? `<div class="tk">From screenshot ${r.img.map(esc).join(", ")}</div>` : ""}</div>`; }).join("")}</div>
+      <button class="btn sm addrow" data-sheet-act="addRow">＋ Add a row</button>
+      ${I.unreadable.length ? `<div class="unread"><b>Couldn't read</b>${I.unreadable.map((u) => `<div>· ${esc(u)}</div>`).join("")}</div>` : ""}`;
+  }
+  const rowHolding = (r) => ({ sym: String(r.sym || "").trim(), name: String(r.name || "").trim(), ccy: normCcy(r.ccy) || (IMP && IMP.defCcy) || "GBP" });
+  function updateShotRow(n) {
+    const r = IMP.rows[n], mt = matchIdea(rowHolding(r)), el = $(`#sheet [data-match="${n}"]`);
+    if (el) el.innerHTML = mt ? pill(mt.i.ticker, ACTION_TONE[mt.i.action]) : `<span class="tk">no match</span>`;
+    const res = computeImport(), b = $("#sheet [data-sheet-act=commitImport]"); if (b) { b.textContent = `Import ${res.holdings.length || ""}`; b.disabled = !res.holdings.length; }
+  }
+  function initShotEvents() {
+    document.addEventListener("paste", (e) => {
+      if (sheetKind !== "shots" || !e.clipboardData) return;
+      const fs = [...e.clipboardData.items].filter((i) => i.kind === "file" && /^image\//.test(i.type)).map((i) => i.getAsFile()).filter(Boolean);
+      if (fs.length) { e.preventDefault(); addShots(fs); }
+    });
+    const w = $("#sheet"), on = (v) => { if (SHOTS.drag !== v) { SHOTS.drag = v; const z = $("#sheet [data-dropz]"); if (z) z.classList.toggle("over", v); } };
+    w.addEventListener("dragover", (e) => { if (sheetKind !== "shots" || SHOTS.busy) return; e.preventDefault(); on(true); });
+    w.addEventListener("dragleave", (e) => { if (e.target === w || !w.contains(e.relatedTarget)) on(false); });
+    w.addEventListener("drop", (e) => { if (sheetKind !== "shots") return; e.preventDefault(); on(false); const fs = [...((e.dataTransfer && e.dataTransfer.files) || [])]; if (fs.length) addShots(fs); });
+  }
+
   // ---------- import sheet ----------
   function importSheet() {
     const I = IMP; let res; let err = "";
+    if (I.kind === "shots") {
+      res = computeImport();
+      return sheetHead("Review holdings", `${esc(I.fileName)} · ${I.rows.length} row${I.rows.length === 1 ? "" : "s"} found`) + `<div class="shb">
+        <div class="detect"><span class="pill t-accent">AI read</span> <b>${esc(I.fmt)}</b></div>
+        <div class="legend2"><span><i class="lg lowc"></i>Hard to read: check it</span><span><i class="lg miss"></i>Not visible: left blank, never guessed</span></div>
+        ${shotsPreview()}
+        ${I.notes ? `<div class="tk">AI note: ${esc(I.notes)}</div>` : ""}
+        <label class="fld"><span>Account label</span><input type="text" data-imp-set="acct" value="${esc(I.acct)}" maxlength="40" placeholder="e.g. Trading 212 ISA"></label>
+        ${P.holdings.length ? `<div class="slbl">Existing holdings</div><div class="chips">${[["add", "Add / update this account"], ["replace", "Replace everything"]].map(([v, l]) => `<button data-imp-mode="${v}" class="${I.mode === v ? "on" : ""}">${l}</button>`).join("")}</div>` : ""}
+        <div class="privnote">🔒 The screenshots have already been discarded. Nothing is saved until you tap Import; holdings are then encrypted on this device only.</div>
+        <div class="err" data-err></div>
+        <div class="shf"><button class="btn" data-close>Cancel</button><button class="btn primary" data-sheet-act="commitImport"${res.holdings.length ? "" : " disabled"}>Import ${res.holdings.length || ""}</button></div></div>`;
+    }
     try { res = computeImport(); } catch (e) { err = e.message; res = { holdings: [], used: 0, ignored: 0 }; }
     const opt = (f) => `<select data-imp-map="${f}" aria-label="${esc(f)}"><option value="-1">—</option>${I.headers.map((h, n) => `<option value="${n}"${I.map[f] === n ? " selected" : ""}>${esc(h || "(column " + (n + 1) + ")")}</option>`).join("")}</select>`;
     const prev = res.holdings.slice(0, 8);
@@ -937,9 +1157,9 @@
       <div class="shf"><button class="btn" data-close>Cancel</button><button class="btn" data-sheet-act="restoreMerge">Merge</button><button class="btn primary" data-sheet-act="restoreReplace">Replace</button></div></div>`;
   }
   const sheetErr = (m) => { const e = $("#sheet [data-err]"); if (e) e.textContent = m || ""; };
-  const filePick = (accept) => new Promise((res) => {
-    const inp = document.createElement("input"); inp.type = "file"; inp.accept = accept; inp.style.display = "none";
-    inp.onchange = () => { const f = inp.files && inp.files[0]; inp.remove(); res(f || null); }; document.body.appendChild(inp); inp.click();
+  const filePick = (accept, multi) => new Promise((res) => {
+    const inp = document.createElement("input"); inp.type = "file"; inp.accept = accept; inp.multiple = !!multi; inp.style.display = "none";
+    inp.onchange = () => { const fs = [...(inp.files || [])]; inp.remove(); res(multi ? fs : fs[0] || null); }; document.body.appendChild(inp); inp.click();
   });
   const readFile = (f) => new Promise((res, rej) => { if (f.size > 8e6) { rej(new Error("File is larger than 8 MB.")); return; } const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = () => rej(r.error); r.readAsText(f); });
   async function pickCsv() {
@@ -954,6 +1174,15 @@
     if (pick) { const i = D.ideas.find((x) => keyOf(x) === pick.dataset.pick); const fm = $("#sheet form"); if (i && fm) { fm.sym.value = i.ticker.split(" / ")[0]; fm.name.value = i.name; fm.link.value = keyOf(i); const pc = mkt(i) && mkt(i).price && normCcy(mkt(i).price.currency); if (pc && !isCryptoIdea(i)) fm.ccy.value = pc; $("#sheet [data-sugg]").innerHTML = ""; fm.qty.focus(); } return; }
     const b = e.target.closest("[data-sheet-act]"); if (!b) return; const a = b.dataset.sheetAct;
     try {
+      if (a === "chooseCsv") { closeSheet(true); pickCsv(); return; }
+      if (a === "chooseShots") { sheetKind = "shots"; dropShots(); paintSheet(); return; }
+      if (a === "pickShots") { await pickShots(); return; }
+      if (a === "rmShot") { const k = SHOTS.imgs.findIndex((i) => i.id === b.dataset.id); if (k >= 0) { const [x] = SHOTS.imgs.splice(k, 1); x.data = null; } paintSheet(); return; }
+      if (a === "readShots") { await readShots(); return; }
+      if (a === "cancelRead") { if (SHOTS.ctl) SHOTS.ctl.abort(); return; }
+      if (a === "goAI") { closeSheet(true); goTab("Settings"); setTimeout(() => { const el = document.getElementById("ai-settings"); if (el) el.scrollIntoView({ block: "start" }); }, 60); return; }
+      if (a === "delRow") { IMP.rows.splice(+b.dataset.n, 1); paintSheet(); return; }
+      if (a === "addRow") { IMP.rows.push({ sym: "", name: "", qty: null, avg: null, price: null, value: null, book: null, ccy: IMP.defCcy, acct: "", conf: 1, unc: [], flags: [], img: [] }); paintSheet(); const ins = $$("#sheet .erow:last-child input"); if (ins[0]) ins[0].focus(); return; }
       if (a === "commitImport") { b.disabled = true; const n = await commitImport(); closeSheet(); render(); toast(`Imported ${n} holding${n === 1 ? "" : "s"}`); }
       if (a === "delHolding") { if (!confirm("Delete this holding from this device?")) return; P.holdings = P.holdings.filter((h) => h.id !== sheetData.id); await savePortfolio(); closeSheet(); render(); toast("Holding deleted"); }
       if (a === "export") { const r = await exportBackup(); const ok = $("#sheet [data-ok]"); if (ok && r !== "cancelled") ok.textContent = r === "shared" ? "Backup ready to save." : "Backup downloaded."; }
@@ -971,10 +1200,13 @@
     catch (e) { if (e.needPass) { sheetKind = "restorepass"; paintSheet(); } else sheetErr(e.message); }
   }
   function onSheetChange(e) {
+    const ef = e.target.closest("select[data-ef]"); if (ef && IMP && IMP.kind === "shots") { IMP.rows[+ef.dataset.n][ef.dataset.ef] = ef.value; updateShotRow(+ef.dataset.n); return; }
     const m = e.target.closest("[data-imp-map]"); if (m) { IMP.map[m.dataset.impMap] = +m.value; paintSheet(); const d = $("#sheet details"); if (d) d.open = true; return; }
     const s = e.target.closest("[data-imp-set]"); if (s && s.tagName === "SELECT") { IMP[s.dataset.impSet] = s.value; paintSheet(); const d = $("#sheet details"); if (d) d.open = true; }
   }
   function onSheetInput(e) {
+    const ef = e.target.closest("input[data-ef]");
+    if (ef && IMP && IMP.kind === "shots") { const r = IMP.rows[+ef.dataset.n], k = ef.dataset.ef; r[k] = ["sym", "name"].includes(k) ? ef.value : ef.value.trim() === "" ? null : ef.value; ef.closest(".ef").classList.remove("miss"); updateShotRow(+ef.dataset.n); return; }
     const s = e.target.closest("[data-imp-set]"); if (s && s.tagName === "INPUT") { IMP[s.dataset.impSet] = s.value; return; }
     if (e.target.name === "sym" && sheetKind === "edit") $("#sheet [data-sugg]").innerHTML = suggestions(e.target.value);
   }
@@ -1042,12 +1274,12 @@
   function portfolioMain() {
     const gate = vaultGate(); if (gate) return `<div class="phead"><h2>Portfolio</h2></div>${gate}`;
     const n = P.holdings.length;
-    const tools = `<div class="ptools"><button class="btn primary" data-act="importCsv"><span aria-hidden="true">⇪</span> Import CSV</button><button class="btn" data-act="addHolding">＋ Add</button><button class="btn" data-act="backup" aria-label="Backup and sync">⇅ Backup</button></div>`;
+    const tools = `<div class="ptools"><button class="btn primary" data-act="importChoose"><span aria-hidden="true">⇪</span> Import</button><button class="btn" data-act="addHolding">＋ Add</button><button class="btn" data-act="backup" aria-label="Backup and sync">⇅ Backup</button></div>`;
     if (!n) return `<div class="phead"><h2>Portfolio</h2></div>
       <div class="card pempty"><div class="gic big">◔</div><h3>Bring in your holdings</h3>
         <p class="muted">See your value, P/L and exposure next to the dashboard's ratings, with flags like “you hold X, rated Trim”.</p>
-        <div class="pemptyb"><button class="btn primary" data-act="importCsv">⇪ Import broker CSV</button><button class="btn" data-act="addHolding">＋ Add manually</button><button class="btn" data-act="restoreFile">⇩ Restore backup</button></div>
-        <div class="brokers"><span>Trading 212</span><span>Freetrade</span><span>Hargreaves Lansdown</span><span>AJ Bell</span><span>Interactive Brokers</span><span>Coinbase</span><span>Any CSV</span></div>
+        <div class="pemptyb"><button class="btn primary" data-act="importCsv">⇪ Import broker CSV</button><button class="btn primary" data-act="importShots">✦ Import from screenshots</button><button class="btn" data-act="addHolding">＋ Add manually</button><button class="btn" data-act="restoreFile">⇩ Restore backup</button></div>
+        <div class="brokers"><span>Screenshots of any app</span><span>Trading 212</span><span>Freetrade</span><span>Hargreaves Lansdown</span><span>AJ Bell</span><span>Interactive Brokers</span><span>Coinbase</span><span>Any CSV</span></div>
         <div class="privnote">🔒 Stored only on this device, encrypted with your passcode. Never uploaded or published.</div></div>
       <h3>Where to get the CSV</h3><div class="card list small howto">
         <div class="item"><div class="lead">Trading 212</div><div class="body">Menu → History → Export (CSV). Transactions are added up into positions.</div></div>
@@ -1077,6 +1309,8 @@
   // ---------- actions wired from the main click handler ----------
   const EXTRA_ACTS = {
     importCsv: () => pickCsv(),
+    importChoose: () => openSheet("importChoose"),
+    importShots: () => { dropShots(); openSheet("shots"); },
     addHolding: () => openSheet("edit", { h: { sym: "", name: "", qty: null, ccy: "GBP" } }),
     backup: () => openSheet("backup"),
     restoreFile: async () => { const f = await filePick(".json,application/json,text/plain"); if (!f) return; restoreText = await readFile(f); openSheet("backup"); await tryRestore(null); },
@@ -1096,7 +1330,7 @@
       models: [["claude-sonnet-5-5", "Claude Sonnet 5.5 (fast, recommended)"], ["claude-opus-5-5", "Claude Opus 5.5 (deeper)"], ["claude-haiku-5-5", "Claude Haiku 5.5 (cheapest)"]] },
     openai: { label: "OpenAI", long: "OpenAI (GPT)", url: "https://api.openai.com/v1/chat/completions", keyUrl: "https://platform.openai.com/api-keys", keyHint: "sk-…",
       models: [["gpt-6.1-sol", "GPT-6.1 Sol (recommended)"], ["gpt-6-astra", "GPT-6 Astra (deeper)"], ["gpt-6-luna", "GPT-6 Luna (cheapest)"]] },
-    xai: { label: "xAI", long: "xAI (Grok)", url: "https://api.x.ai/v1/chat/completions", keyUrl: "https://console.x.ai/", keyHint: "xai-…",
+    xai: { label: "xAI", long: "xAI (Grok)", url: "https://api.x.ai/v1/responses", keyUrl: "https://console.x.ai/", keyHint: "xai-…",
       models: [["grok-4.7", "Grok 4.7 (recommended)"], ["grok-4.6", "Grok 4.6"]] },
   };
   function suggestions0() {
@@ -1174,6 +1408,11 @@ How to answer:
     if (cfg.provider === "anthropic") {
       headers = { "content-type": "application/json", "x-api-key": cfg.key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
       body = { model: cfg.model, max_tokens: maxTokens || 4096, system: sys, messages: msgs, stream: true };
+    } else if (cfg.provider === "xai") {
+      // xAI's current Grok models are served on the Responses API
+      headers = { "content-type": "application/json", authorization: "Bearer " + cfg.key };
+      body = { model: cfg.model, stream: true, store: false, input: [{ role: "system", content: sys }, ...msgs] };
+      if (maxTokens) body.max_output_tokens = maxTokens;
     } else {
       headers = { "content-type": "application/json", authorization: "Bearer " + cfg.key };
       body = { model: cfg.model, stream: true, messages: [{ role: "system", content: sys }, ...msgs] };
@@ -1195,6 +1434,7 @@ How to answer:
     let j; try { j = JSON.parse(d); } catch { return ""; }
     if (j.type === "error" || (j.error && !j.choices)) throw new Error((j.error && j.error.message) || "The provider returned an error");
     if (cfg.provider === "anthropic") return j.type === "content_block_delta" && j.delta && j.delta.type === "text_delta" ? j.delta.text : "";
+    if (cfg.provider === "xai") { if (j.type === "response.failed" || j.type === "response.error") throw new Error((j.response && j.response.error && j.response.error.message) || "The provider returned an error"); return j.type === "response.output_text.delta" && typeof j.delta === "string" ? j.delta : ""; }
     return (j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content) || "";
   }
   function errText(e, cfg) {
