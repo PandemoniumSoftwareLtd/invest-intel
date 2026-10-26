@@ -14,6 +14,13 @@ price history, fundamentals and FX are fetched at build time and stored inside t
 - Encrypted backup export/import (same passcode) moves holdings between iPhone, iPad and Mac. Backups never include the API key or chat.
 - The Analyst sends the system prompt (dashboard data and/or portfolio, per the in-app toggles; "What's sent?" previews it) directly from
   the device to the chosen provider with the user's own key.
+- **Import from screenshots**: Portfolio → Import → Screenshots (or paste on Mac / drag-and-drop). Up to 8 images are decoded and
+  downscaled on the device (long edge 1600px, JPEG), sent only to the Analyst's chosen provider with the saved key (vision fallback:
+  Claude Sonnet / GPT-6.1 Sol / Grok 4.7), and parsed from strict JSON. Rows are merged across screenshots, low-confidence cells are
+  highlighted and unseen numbers are left blank (never estimated). Nothing is saved until the review is confirmed. Images live only in
+  memory and are dropped after reading, on close and on lock; they are never written to IndexedDB, Cache Storage or localStorage.
+  `img-src` allows `blob:` only for the HEIC/decoder fallback; thumbnails are canvases. HEIC works where the browser decodes it (Safari).
+- xAI uses the Responses API (`/v1/responses`, `store:false`); Anthropic uses Messages; OpenAI uses Chat Completions.
 
 ## Layout
 - Repo root = the published app shell (no data): `index.html`, `app.js`, `styles.css`, `sw.js`, `manifest.json`, `icons/`, `robots.txt`, plus `data.enc.json`.
