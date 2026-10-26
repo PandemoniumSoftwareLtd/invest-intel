@@ -1,7 +1,8 @@
 // Caches the app shell for offline use. data.enc.json is network-first (it is encrypted).
 const CACHE = "invest-intel-__BUILD__";
 const SHELL = ["./", "index.html", "app.js", "styles.css", "manifest.json", "data.enc.json",
-  "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
+  "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png",
+  "icons/icon-152.png", "icons/icon-167.png", "icons/icon-32.png"];
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
 });
