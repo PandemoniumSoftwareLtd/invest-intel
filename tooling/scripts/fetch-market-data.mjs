@@ -6,7 +6,7 @@
 // The symbol map is local and gitignored (it reveals the watchlist). Output is plaintext → gitignored;
 // build.mjs merges it into the encrypted payload. Anything that fails is listed in `missing`, never guessed.
 import fs from "node:fs";
-const [symPath = "market-symbols.json", out = "market.json"] = process.argv.slice(2);
+const [symPath = "market-symbols.json", out = "market.json"] = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const SYMS = JSON.parse(fs.readFileSync(symPath, "utf8"));
 const UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -87,7 +87,22 @@ async function gecko(id) {
     rank: c.market_cap_rank, lastUpdated: md.last_updated }, url: `https://www.coingecko.com/en/coins/${id}` };
 }
 
+// ---------- FX (ECB reference rates via Frankfurter; used to value portfolio holdings in one currency) ----------
+async function fetchFx() {
+  const url = "https://api.frankfurter.dev/v1/latest?base=GBP&symbols=USD,EUR,SEK,AUD,CAD,CHF,JPY,HKD,DKK,NOK";
+  const j = await (await get(url, { headers: { accept: "application/json" } })).json();
+  if (!j.rates || !j.rates.USD) throw new Error("no FX rates");
+  return { base: "GBP", date: j.date, rates: j.rates, source: "ECB reference rates (via Frankfurter)", url: "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html" };
+}
+if (process.argv.includes("--fx-only")) {
+  // Refresh only the FX block of an existing market.json
+  const cur = JSON.parse(fs.readFileSync(out, "utf8"));
+  cur.fx = await fetchFx(); fs.writeFileSync(out, JSON.stringify(cur));
+  console.log(`FX updated (${cur.fx.date}).`); process.exit(0);
+}
+
 const result = { fetchedAt: new Date().toISOString(), assets: {}, missing: [] };
+try { result.fx = await fetchFx(); console.log(`FX: ${result.fx.date}`); } catch (e) { result.missing.push({ name: "FX rates", missing: ["FX rates: " + e.message] }); }
 for (const [name, s] of Object.entries(SYMS)) {
   const a = { liveUrl: s.yahoo ? `https://finance.yahoo.com/quote/${encodeURIComponent(s.yahoo)}` : null, liveLabel: "Yahoo Finance" };
   const miss = [];

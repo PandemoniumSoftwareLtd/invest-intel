@@ -16,6 +16,11 @@ const base0 = JSON.parse(fs.readFileSync(dataPath, "utf8"));
 if (fs.existsSync("market.json")) base0.market = JSON.parse(fs.readFileSync("market.json", "utf8"));
 else console.warn("market.json not found: building without price history/fundamentals");
 base0.publish = fs.existsSync("publish.json") ? JSON.parse(fs.readFileSync("publish.json", "utf8")) : { schedule: "Weekdays ~7:00 UK" };
+// matching hints for the on-device portfolio (extra listing symbols, name aliases); kept inside the encrypted payload
+if (fs.existsSync("market-symbols.json")) {
+  const ms = JSON.parse(fs.readFileSync("market-symbols.json", "utf8")); base0.match = {};
+  for (const [name, s] of Object.entries(ms)) base0.match[name] = { syms: [s.yahoo, ...(s.alsoSymbols || [])].filter(Boolean), aliases: s.aliases || [] };
+}
 base0.builtAt = new Date().toISOString();
 const plain = JSON.stringify(base0);
 
@@ -56,8 +61,14 @@ const d = JSON.parse(plain);
 for (const i of d.ideas) { probes.add(i.name); probes.add(i.thesis.slice(0, 30)); }
 probes.add(d.asOf);
 for (const a of Object.values(d.market?.assets || {})) { if (a.liveUrl) probes.add(a.liveUrl); if (a.stats?.url) probes.add(a.stats.url); }
+const GENERIC = new Set(["Coinbase"]);
+for (const n of Object.values(base0.match || {})) for (const a of n.aliases) if (a.length > 4) probes.add(a);
+for (const n of Object.values(base0.match || {})) for (const y of n.syms) if (y.length > 3) probes.add(y);
+const ALLOWED = new Set(["index.html", "app.js", "styles.css", "sw.js", "manifest.json", "robots.txt", "data.enc.json", ".nojekyll"]);
 const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]);
 for (const f of walk(OUT)) {
+  const rel = path.relative(OUT, f);
+  if (!ALLOWED.has(rel) && !/^icons\/[\w-]+\.png$/.test(rel)) throw new Error(`Unexpected file in ${OUT}/: ${rel}`);
   if (f.endsWith(".png")) continue;
   let txt = fs.readFileSync(f, "utf8");
   if (f.endsWith("data.enc.json")) {
@@ -66,7 +77,9 @@ for (const f of walk(OUT)) {
     if (Object.keys(e).sort().join() !== "cipher,ct,iterations,iv,kdf,salt,v" || !/^[A-Za-z0-9+/=]+$/.test(e.ct)) throw new Error("Unexpected data.enc.json shape");
     txt = JSON.stringify({ ...e, ct: "" });
   }
-  for (const p of probes) if (p && p.length > 3 && txt.includes(p)) throw new Error(`Plaintext leak in ${f}`);
+  // "Coinbase" is also a supported broker CSV format, so the app shell legitimately names it.
+  for (const p of probes) if (p && p.length > 3 && !GENERIC.has(p) && txt.includes(p)) throw new Error(`Plaintext leak in ${f}: ${p.length} chars`);
+  if (/sk-ant-[A-Za-z0-9]|xai-[A-Za-z0-9]{20}|sk-[A-Za-z0-9]{20}/.test(txt)) throw new Error(`Something that looks like an API key in ${f}`);
   if (txt.includes(pass)) throw new Error(`Passcode leak in ${f}`);
 }
 console.log(`Built ${OUT}/ (build ${buildId}): ${d.ideas.length} ideas encrypted, ${ITER} PBKDF2 iterations, no plaintext found in published files.`);
