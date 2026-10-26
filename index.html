@@ -14,7 +14,11 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Invest Intel">
 <link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="apple-touch-icon" sizes="152x152" href="icons/icon-152.png">
+<link rel="apple-touch-icon" sizes="167x167" href="icons/icon-167.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -31,19 +35,26 @@
   </form>
 </div>
 <div id="app" class="app" hidden>
-  <header class="top">
-    <div>
-      <h1 id="title">Invest Intel</h1>
-      <div id="asof" class="muted small"></div>
+  <nav class="tabs" id="tabs" aria-label="Sections"></nav>
+  <div class="mainCol">
+    <header class="top">
+      <div>
+        <h1 id="title">Invest Intel</h1>
+        <div id="asof" class="muted small"></div>
+      </div>
+      <div class="topBtns">
+        <button id="themeBtn" class="iconBtn" aria-label="Toggle dark or light">◐</button>
+        <button id="lockBtn" class="iconBtn" aria-label="Lock">🔒</button>
+      </div>
+    </header>
+    <div class="searchRow">
+      <input id="q" type="search" placeholder="Search ideas, tickers, events" aria-label="Search" autocomplete="off" enterkeyhint="search">
+      <button id="filtBtn" class="btn fbtn" aria-expanded="false" aria-controls="filters">Filters<span id="fcount" class="fcount" hidden></span></button>
     </div>
-    <div class="topBtns">
-      <button id="themeBtn" class="iconBtn" aria-label="Toggle dark or light">◐</button>
-      <button id="lockBtn" class="iconBtn" aria-label="Lock">🔒</button>
-    </div>
-  </header>
-  <div id="banner" class="banner" role="status" hidden></div>
-  <main id="view"></main>
-  <nav class="tabs" id="tabs"></nav>
+    <div id="filters" class="filters card" hidden></div>
+    <div id="banner" class="banner" role="status" hidden></div>
+    <main id="view"></main>
+  </div>
 </div>
 <script src="app.js"></script>
 </body>

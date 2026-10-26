@@ -110,6 +110,10 @@
   const CHECK = { open: ["On open only", 0], "15m": ["Every 15 min", 15], "1h": ["Every hour", 60], "4h": ["Every 4 hours", 240] };
 
   let D, W, ranked, st, pending = null, timer = null;
+  const IDEA_VIEWS = ["Focus", "Scoreboard", "Themes", "Crypto"];
+  const isWide = () => matchMedia("(min-width: 900px)").matches;
+  // global filters (theme, action, min score) apply to every idea list
+  const vis = (arr) => arr.filter((i) => (st.fTheme === "All" || i.theme === st.fTheme) && (st.fAction === "All" || i.action === st.fAction) && score10(i) >= Number(st.fMin) * 10);
   const pill = (t, tone) => `<span class="pill t-${tone}">${esc(t)}</span>`;
   const score10 = (i) => Math.round(FACTORS.reduce((a, f) => a + i.s[f.key] * W[f.key], 0) / 10);
   const fmt = (t) => (t / 10).toFixed(1);
@@ -147,10 +151,20 @@
     const base = asOfDate();
     const saved = sessionStorage.getItem("view");
     st = { view: saved || (VIEWS.includes(S.startView) ? S.startView : "Focus"), group: "All", action: "All", sort: "overall", cols: "Decision",
-      theme: "Defence", cal: "All", month: iso(base).slice(0, 7), detail: null, range: "6M", back: null };
+      theme: "Defence", cal: "All", month: iso(base).slice(0, 7), detail: null, range: "6M", back: null,
+      q: "", fTheme: "All", fAction: "All", fMin: "0", showFilters: false };
     $("#lock").hidden = true; $("#app").hidden = false;
-    $("#tabs").innerHTML = TABS.map(([v, ic]) => `<button data-tab="${v}"><span class="ic">${ic}</span><span class="tl">${v}</span></button>`).join("");
-    $("#tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (b) { st.view = b.dataset.tab; st.detail = null; sessionStorage.setItem("view", st.view); render(); scrollTo(0, 0); } };
+    $("#tabs").innerHTML = `<div class="navIn"><div class="brand"><img src="icons/icon-192.png" alt="" width="28" height="28"><span>Invest Intel</span></div>`
+      + TABS.map(([v, ic], n) => `<button data-tab="${v}" aria-keyshortcuts="${n + 1}"><span class="ic">${ic}</span><span class="tl">${v}</span><kbd>${n + 1}</kbd></button>`).join("")
+      + `<div class="kbhelp"><kbd>/</kbd> search · <kbd>j</kbd><kbd>k</kbd> move · <kbd>Esc</kbd> close</div></div>`;
+    $("#tabs").onclick = (e) => { const b = e.target.closest("[data-tab]"); if (b) goTab(b.dataset.tab); };
+    $("#q").oninput = (e) => { st.q = e.target.value; render(); };
+    $("#filtBtn").onclick = () => { st.showFilters = !st.showFilters; renderFilters(); };
+    $("#filters").onclick = (e) => { const b = e.target.closest("[data-f]"); if (!b) return; if (b.dataset.f === "clear") { st.fTheme = "All"; st.fAction = "All"; st.fMin = "0"; } else st[b.dataset.f] = b.dataset.val; renderFilters(); render(); };
+    $("#filters").onchange = (e) => { const t = e.target.closest("select[data-f]"); if (t) { st[t.dataset.f] = t.value; renderFilters(); render(); } };
+    let rt; window.onresize = () => { clearTimeout(rt); rt = setTimeout(render, 150); };
+    document.addEventListener("keydown", onKey);
+    renderFilters();
     $("#view").onclick = onClick; $("#view").onchange = onChange;
     $("#banner").onclick = (e) => { if (e.target.closest("[data-apply]")) applyPending(); if (e.target.closest("[data-dismiss]")) hideBanner(); };
     window.onpopstate = () => { if (st.detail) { st.detail = null; render(); } };
@@ -170,6 +184,9 @@
     if (c) { st[c.dataset.set] = c.dataset.val; render(); return; }
     const s = e.target.closest("button[data-setting]");
     if (s) { setSetting(s.dataset.setting, s.dataset.val); return; }
+    const ka = e.target.closest("[data-kpi-action]");
+    if (ka) { st.fAction = st.fAction === ka.dataset.kpiAction ? "All" : ka.dataset.kpiAction; renderFilters(); render(); return; }
+    const g = e.target.closest("[data-goto]"); if (g) { goTab(g.dataset.goto); return; }
     const card = e.target.closest("[data-open]");
     if (card) openDetail(card.dataset.open);
   }
@@ -177,8 +194,46 @@
     const s = e.target.closest("select[data-set]"); if (s) { st[s.dataset.set] = s.value; render(); return; }
     const t = e.target.closest("[data-setting]"); if (t) setSetting(t.dataset.setting, t.type === "checkbox" ? t.checked : t.value);
   }
+  function goTab(v) {
+    st.view = v; st.detail = null; st.q = ""; $("#q").value = ""; sessionStorage.setItem("view", v); render(); scrollTo(0, 0);
+  }
   function openDetail(k) {
-    st.detail = k; st.range = "6M"; history.pushState({ detail: k }, ""); render(); scrollTo(0, 0);
+    st.detail = k; st.range = "6M";
+    if (isWide() && splitOn()) { render(); const p = $(".detailpane"); if (p) p.scrollTop = 0; return; }
+    history.pushState({ detail: k }, ""); render(); scrollTo(0, 0);
+  }
+  const splitOn = () => isWide() && (IDEA_VIEWS.includes(st.view) || st.q.trim() !== "");
+  function onKey(e) {
+    if (!D || $("#app").hidden) return;
+    const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName);
+    if (e.key === "Escape") {
+      if (st.q) { st.q = ""; $("#q").value = ""; $("#q").blur(); render(); }
+      else if (typing) e.target.blur();
+      else if (st.showFilters) { st.showFilters = false; renderFilters(); }
+      else if (st.detail) { if (!splitOn() && history.state && history.state.detail) history.back(); else { st.detail = null; render(); } }
+      return;
+    }
+    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === "/") { e.preventDefault(); $("#q").focus(); $("#q").select(); return; }
+    if (/^[1-7]$/.test(e.key)) { goTab(TABS[+e.key - 1][0]); return; }
+    if ((e.key === "j" || e.key === "k" || e.key === "ArrowDown" || e.key === "ArrowUp") && splitOn()) {
+      const ks = [...new Set([...document.querySelectorAll(".listpane .idea[data-open]")].map((x) => x.dataset.open))]; if (!ks.length) return;
+      e.preventDefault(); const cur = ks.indexOf(st.detail || selKey()); const n = Math.max(0, Math.min(ks.length - 1, cur + (e.key === "j" || e.key === "ArrowDown" ? 1 : -1)));
+      openDetail(ks[n]); const el = document.querySelector(`.listpane .idea[data-open="${CSS.escape(ks[n])}"]`); if (el) el.scrollIntoView({ block: "nearest" });
+    }
+  }
+  function renderFilters() {
+    const n = (st.fTheme !== "All") + (st.fAction !== "All") + (st.fMin !== "0");
+    $("#fcount").hidden = !n; $("#fcount").textContent = n; $("#filtBtn").setAttribute("aria-expanded", st.showFilters);
+    $("#filters").hidden = !st.showFilters;
+    const fc = (key, opts) => `<div class="chips">${opts.map((o) => `<button data-f="${key}" data-val="${esc(o)}" class="${st[key] === o ? "on" : ""}">${esc(o)}</button>`).join("")}</div>`;
+    $("#filters").innerHTML = `<div class="slbl">Theme</div>${fc("fTheme", ["All", ...THEMES])}<div class="slbl">Action</div>${fc("fAction", ["All", ...ACTIONS])}
+      <div class="frow"><label class="slbl" for="fMin">Min score</label><select id="fMin" data-f="fMin">${["0", "5", "6", "7", "7.5", "8"].map((v) => `<option value="${v}"${st.fMin === v ? " selected" : ""}>${v === "0" ? "Any" : v + "+"}</option>`).join("")}</select>
+      <button class="btn" data-f="clear">Clear</button></div><div class="tk">Filters apply to every idea list, the KPI strip and search.</div>`;
+  }
+  function selKey() {
+    if (st.detail) return st.detail;
+    const first = document.querySelector(".listpane .idea[data-open]"); return first ? first.dataset.open : null;
   }
 
   async function setSetting(k, v) {
@@ -251,7 +306,7 @@
   function ideaCard(i, opts = {}) {
     const body = opts.body ?? i.trigger; const m = mkt(i);
     const px = m && m.price ? `<span class="px">${money(m.price.last, m.price.currency)} <span class="${m.price.change1d >= 0 ? "pos" : "neg"}">${pct(m.price.change1d)}</span></span>` : "";
-    return `<button class="card idea" data-open="${esc(keyOf(i))}" aria-label="Open ${esc(i.name)} details">
+    return `<button class="card idea${st.detail === keyOf(i) ? " sel" : ""}" data-open="${esc(keyOf(i))}" aria-label="Open ${esc(i.name)} details"${st.detail === keyOf(i) ? ' aria-current="true"' : ""}>
       <div class="row1"><div><div class="nm">${esc(i.name)} <span class="tk">${esc(i.ticker)} · ${esc(i.listing)}</span></div>
       <div>${pill(i.action, ACTION_TONE[i.action])} <span class="tk">${esc(i.theme)} · ${esc(i.role)}</span></div></div>
       <div class="rt"><div class="score">${fmt(score10(i))}</div>${spark(i)}</div></div>
@@ -302,7 +357,7 @@
     const pts = all.filter((p) => new Date(p[0]) >= from);
     if (pts.length < 2) return `<div class="muted small">Not enough history for this range.</div>`;
     const vals = pts.map((p) => p[1]); const lo = Math.min(...vals), hi = Math.max(...vals);
-    const wide = innerWidth >= 900; const Wd = wide ? 620 : 340, H = wide ? 240 : 170, L = 4, R = 4, T = 14, B = 18;
+    const pane = splitOn(); const wide = isWide() && !pane; const Wd = pane ? 420 : wide ? 620 : 340, H = pane ? 210 : wide ? 240 : 170, L = 4, R = 4, T = 14, B = 18;
     const sx = (k) => L + k / (pts.length - 1) * (Wd - L - R), sy = (v) => T + (hi - v) / ((hi - lo) || 1) * (H - T - B);
     const line = pts.map((p, k) => `${sx(k).toFixed(1)},${sy(p[1]).toFixed(1)}`).join(" ");
     const area = `${L},${H - B} ${line} ${Wd - R},${H - B}`;
@@ -325,7 +380,7 @@
 
   function detail(i) {
     const m = mkt(i) || {}; const p = m.price, f = m.financials, s = m.stats, c = m.crypto;
-    let out = `<button class="back" data-act="back">‹ Back</button>
+    let out = `${splitOn() ? "" : `<button class="back" data-act="back">‹ Back</button>`}
       <div class="card dh1"><div class="row1"><div><h2 class="dname">${esc(i.name)}</h2><div class="tk">${esc(i.ticker)} · ${esc(i.listing)} · ${esc(i.theme)} · ${esc(i.role)}</div>
       <div class="mt6">${pill(i.action, ACTION_TONE[i.action])}</div></div><div class="score big">${fmt(score10(i))}<div class="tk">/10</div></div></div></div>`;
     // price
@@ -396,21 +451,31 @@
   // ---------- views ----------
   const V = {
     Focus() {
-      const act = [...ranked.filter((i) => i.action === "Buy" || i.action === "Accumulate on dips").slice(0, 6),
-        ...ranked.filter((i) => i.action === "Trim" || i.action === "Avoid")];
+      const R = vis(ranked);
+      const act = [...R.filter((i) => i.action === "Buy" || i.action === "Accumulate on dips").slice(0, 6),
+        ...R.filter((i) => i.action === "Trim" || i.action === "Avoid")];
       const b = asOfDate(), e = new Date(b); e.setDate(e.getDate() + 7);
       const n7 = D.catalysts.filter((c) => c.date >= iso(b) && c.date <= iso(e));
-      return `<h2>Act now</h2><div class="cards">${act.map((i) => ideaCard(i)).join("")}</div>
+      const nextC = D.catalysts.find((c) => c.date >= iso(b));
+      const top = R[0];
+      const kpi = `<div class="kpis">
+        <div class="kpi wide2"><div class="kl">Ideas by action</div><div class="kacts">${ACTIONS.map((a) => { const n = R.filter((i) => i.action === a).length;
+          return `<button class="kact${st.fAction === a ? " on" : ""}" data-kpi-action="${esc(a)}">${pill(a, ACTION_TONE[a])}<b>${n}</b></button>`; }).join("")}</div></div>
+        ${top ? `<button class="kpi" data-open="${esc(keyOf(top))}"><div class="kl">Top idea</div><div class="kv1">${esc(top.name)} <span class="kscore">${fmt(score10(top))}</span></div><div class="ks">${esc(top.action)} · ${esc(top.ticker)}</div></button>` : ""}
+        ${nextC ? `<button class="kpi" data-goto="Calendar"><div class="kl">Next catalyst</div><div class="kv1">${esc(nextC.label)}</div><div class="ks">${esc(nextC.event)}</div></button>` : ""}
+        <button class="kpi kall" data-goto="Themes"><div class="kl">Theme stance</div><div class="kthemes">${THEMES.map((t) => `<span>${esc(t)} ${pill(D.themeStances[t].stance, STANCE_TONE[D.themeStances[t].stance])}</span>`).join("")}</div></button>
+      </div>`;
+      return `${kpi}<h2>Act now <span class="tk">(${act.length})</span></h2><div class="cards">${act.length ? act.map((i) => ideaCard(i)).join("") : `<div class="card muted">No ideas match the current filters.</div>`}</div>
       <div class="grid2"><div><h2>What changed</h2>${list(D.changes.map((c) => ({ lead: c.date, title: c.what, detail: c.soWhat, pill: pill(c.impact, IMPACT_TONE[c.impact]) })))}</div>
       <div><h2>Next 7 days</h2>${list(n7.map((c) => ({ lead: c.label, title: c.event, detail: `${c.type} · ${c.why}` })))}</div></div>
-      <h2>Conviction and risk-reward</h2><div class="grid2"><div><h3>Top 10 by overall score</h3>${bars(ranked.slice(0, 10))}</div>
-      <div><h3>Overall score vs safety</h3>${scatter(D.ideas.map((i) => ({ x: i.s.r, y: score10(i) / 10, label: i.ticker, series: i.theme, k: keyOf(i) })), "Risk score (higher = safer)", "Overall score", 0, 10, 3, 9)}</div></div>
+      <h2>Conviction and risk-reward</h2><div class="grid2"><div><h3>Top 10 by overall score</h3>${bars(R.slice(0, 10))}</div>
+      <div><h3>Overall score vs safety</h3>${scatter(vis(D.ideas).map((i) => ({ x: i.s.r, y: score10(i) / 10, label: i.ticker, series: i.theme, k: keyOf(i) })), "Risk score (higher = safer)", "Overall score", 0, 10, 3, 9)}</div></div>
       ${D.notes.conviction ? `<div class="note">${esc(D.notes.conviction)}</div>` : ""}
       <h2>Market backdrop</h2><div class="card"><dl class="kv">${D.marketBackdrop.map((m) => `<dt>${esc(m.label)}</dt><dd>${esc(m.value)}</dd>`).join("")}</dl></div>`;
     },
     Scoreboard() {
       const groups = ["All", ...THEMES, "Second-order", "Near peak"].map((g) => [g, g, g === "All" ? D.ideas.length : D.ideas.filter((i) => i.theme === g || i.role === g).length]);
-      const board = D.ideas.filter((i) => (st.group === "All" || i.theme === st.group || i.role === st.group) && (st.action === "All" || i.action === st.action))
+      const board = vis(D.ideas).filter((i) => (st.group === "All" || i.theme === st.group || i.role === st.group) && (st.action === "All" || i.action === st.action))
         .sort((a, b) => { const av = st.sort === "overall" ? score10(a) : a.s[st.sort] * 10, bv = st.sort === "overall" ? score10(b) : b.s[st.sort] * 10; return bv - av || byScore(a, b); });
       let rows;
       if (st.cols === "Scores") rows = `<div class="card"><table class="simple"><tr><th>Idea</th><th>All</th>${FACTORS.map((f) => `<th>${f.short}</th>`).join("")}</tr>
@@ -431,7 +496,7 @@
         ${D.notes.actions ? `<div class="note">${esc(D.notes.actions)}</div>` : ""}`;
     },
     Themes() {
-      const t = st.theme, s = D.themeStances[t]; const inT = (r) => ranked.filter((i) => i.theme === t && i.role === r);
+      const t = st.theme, s = D.themeStances[t]; const inT = (r) => vis(ranked).filter((i) => i.theme === t && i.role === r);
       const sec = (h, r, o) => inT(r).length ? `<h2>${h}</h2><div class="cards">${inT(r).map((i) => ideaCard(i, o)).join("")}</div>` : "";
       return `${chips("theme", THEMES.map((x) => [x, x, D.ideas.filter((i) => i.theme === x).length]))}
         <h2>Theme stance</h2><div class="card"><dl class="kv"><dt>Stance</dt><dd>${pill(s.stance, STANCE_TONE[s.stance])}</dd>
@@ -444,7 +509,7 @@
         <div class="cat">${pill(r.direction, DIR_TONE[r.direction])} <span class="tk">${esc(r.status)}</span></div>
         <div class="trig small">${esc(r.next)}</div><div class="det muted small">Moves: ${esc(r.impact)}</div></div>`).join("")}
         ${D.notes.cryptoNetRead ? `<div class="note">${esc(D.notes.cryptoNetRead)}</div>` : ""}
-        <h2>Crypto ideas</h2><div class="cards">${ranked.filter((i) => i.theme === "Crypto").map((i) => ideaCard(i)).join("")}</div>
+        <h2>Crypto ideas</h2><div class="cards">${vis(ranked).filter((i) => i.theme === "Crypto").map((i) => ideaCard(i)).join("")}</div>
         <h2>Crypto news</h2>${linkList(D.news.Crypto || [])}`;
     },
     Calendar() {
@@ -482,13 +547,43 @@
     },
   };
 
+  function searchView(q) {
+    const t = q.toLowerCase(); const has = (...xs) => xs.some((x) => x && String(x).toLowerCase().includes(t));
+    const ideas = vis(ranked).filter((i) => has(i.name, i.ticker, i.listing, i.theme, i.role, i.thesis, i.trigger, i.catalyst, i.risk, i.link, i.action));
+    const cats = D.catalysts.filter((c) => has(c.event, c.why, c.type, c.label));
+    const chg = D.changes.filter((c) => has(c.what, c.soWhat));
+    const news = THEMES.flatMap((th) => D.news[th] || []).filter((n) => has(n.title, n.site));
+    const regs = D.cryptoRegs.filter((r) => has(r.measure, r.impact, r.next, r.j));
+    const none = !ideas.length && !cats.length && !chg.length && !news.length && !regs.length;
+    return `<h2>Search: “${esc(q)}”</h2>${none ? `<div class="card muted">Nothing matches. Esc clears the search.</div>` : ""}
+      ${ideas.length ? `<h3>Ideas (${ideas.length})</h3><div class="cards">${ideas.map((i) => ideaCard(i)).join("")}</div>` : ""}
+      ${cats.length ? `<h3>Calendar (${cats.length})</h3>${list(cats.map((c) => ({ lead: c.label, title: c.event, detail: `${c.type} · ${c.why}` })))}` : ""}
+      ${chg.length ? `<h3>What changed (${chg.length})</h3>${list(chg.map((c) => ({ lead: c.date, title: c.what, detail: c.soWhat })))}` : ""}
+      ${regs.length ? `<h3>Crypto regulation (${regs.length})</h3>${list(regs.map((r) => ({ lead: r.j, title: r.measure, detail: `${r.status} · ${r.next}` })))}` : ""}
+      ${news.length ? `<h3>News (${news.length})</h3>${linkList(news)}` : ""}`;
+  }
+
   function render() {
     const wl = FACTORS.map((f) => `${f.short} ${W[f.key]}%`).join(", ");
     $("#asof").textContent = "As of " + D.asOf;
-    const det = st.detail ? D.ideas.find((i) => keyOf(i) === st.detail) : null;
-    const head = st.view === "Settings" && !det ? "" : `<div class="note"><b>Research, not regulated financial advice.</b> As of ${esc(D.asOf)}. Overall score (1–10) = ${esc(wl)}. Risk: higher = lower risk.</div>`;
-    $("#view").innerHTML = det ? detail(det) + `<div class="note mt12"><b>Research, not regulated financial advice.</b> As of ${esc(D.asOf)}.</div>`
-      : head + V[st.view]() + (st.view === "Settings" ? "" : `<div class="foot">Tap any idea for price chart, fundamentals and scores · 🔒 locks this device</div>`);
+    const q = st.q.trim();
+    let det = st.detail ? D.ideas.find((i) => keyOf(i) === st.detail) : null;
+    const head = st.view === "Settings" && !q ? "" : `<div class="note"><b>Research, not regulated financial advice.</b> As of ${esc(D.asOf)}. Overall score (1–10) = ${esc(wl)}. Risk: higher = lower risk.</div>`;
+    const foot = `<div class="foot">${isWide() ? "Select an idea to see its chart and fundamentals alongside · 1–7 switch views · / search · Esc close" : "Tap any idea for price chart, fundamentals and scores · 🔒 locks this device"}</div>`;
+    const body = () => (q ? searchView(q) : V[st.view]());
+    document.body.classList.toggle("split-mode", splitOn());
+    const prevPane = $(".detailpane"), prevTop = prevPane ? prevPane.scrollTop : 0, prevKey = prevPane ? prevPane.dataset.k : null;
+    if (splitOn()) {
+      const listHtml = head + body() + foot;
+      $("#view").innerHTML = `<div class="split"><div class="listpane">${listHtml}</div><aside class="detailpane" aria-label="Idea detail"></aside></div>`;
+      const k = selKey(); det = k ? D.ideas.find((i) => keyOf(i) === k) : null;
+      if (det && !st.detail) document.querySelectorAll(`.listpane .idea[data-open="${CSS.escape(k)}"]`).forEach((x) => x.classList.add("sel"));
+      $(".detailpane").innerHTML = det ? detail(det) : `<div class="card muted">No idea selected. Pick one from the list.</div>`;
+      const pane = $(".detailpane"); pane.dataset.k = det ? keyOf(det) : ""; if (det && prevKey === keyOf(det)) pane.scrollTop = prevTop;
+    } else {
+      $("#view").innerHTML = det ? detail(det) + `<div class="note mt12"><b>Research, not regulated financial advice.</b> As of ${esc(D.asOf)}.</div>`
+        : head + body() + (st.view === "Settings" ? "" : foot);
+    }
     document.querySelectorAll("[data-w]").forEach((el) => { el.style.width = el.dataset.w + "%"; });
     document.querySelectorAll("#tabs [data-tab]").forEach((b) => b.classList.toggle("on", b.dataset.tab === st.view));
   }
