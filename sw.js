@@ -1,5 +1,5 @@
 // Caches the app shell for offline use. data.enc.json is network-first (it is encrypted).
-const CACHE = "invest-intel-0b43aaa88e77";
+const CACHE = "invest-intel-c0beaed697f1";
 const SHELL = ["./", "index.html", "app.js", "styles.css", "manifest.json", "data.enc.json",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 self.addEventListener("install", (e) => {
