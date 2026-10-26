@@ -1,0 +1,20 @@
+name: Decode icons
+on:
+  push:
+    paths: ["icons/*.b64", ".github/workflows/icons.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  decode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode base64 PNGs and commit
+        run: |
+          for f in icons/*.png.b64; do base64 -d "$f" > "${f%.b64}"; done
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add icons/*.png
+          git diff --cached --quiet || git commit -m "Decode PNG icons"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

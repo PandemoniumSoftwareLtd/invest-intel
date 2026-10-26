@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<title>Invest Intel</title>
+<meta name="theme-color" content="#0b1220" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f7fb" media="(prefers-color-scheme: light)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Invest Intel">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="lock" class="lock">
+  <form id="lockForm" class="lockCard" autocomplete="off">
+    <img src="icons/icon-192.png" alt="" width="64" height="64">
+    <h1>Invest Intel</h1>
+    <p class="muted">Private. Enter your passcode to unlock.</p>
+    <input id="pass" type="password" inputmode="text" autocomplete="current-password" placeholder="Passcode" aria-label="Passcode" required>
+    <label class="remember"><input id="remember" type="checkbox" checked> Remember on this device</label>
+    <button id="unlockBtn" type="submit">Unlock</button>
+    <p id="lockMsg" class="err" role="alert"></p>
+  </form>
+</div>
+<div id="app" class="app" hidden>
+  <header class="top">
+    <div>
+      <h1 id="title">Invest Intel</h1>
+      <div id="asof" class="muted small"></div>
+    </div>
+    <div class="topBtns">
+      <button id="themeBtn" class="iconBtn" aria-label="Toggle dark or light">◐</button>
+      <button id="lockBtn" class="iconBtn" aria-label="Lock">🔒</button>
+    </div>
+  </header>
+  <main id="view"></main>
+  <nav class="tabs" id="tabs"></nav>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
