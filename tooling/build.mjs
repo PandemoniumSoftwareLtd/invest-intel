@@ -21,6 +21,23 @@ if (fs.existsSync("market-symbols.json")) {
   const ms = JSON.parse(fs.readFileSync("market-symbols.json", "utf8")); base0.match = {};
   for (const [name, s] of Object.entries(ms)) base0.match[name] = { syms: [s.yahoo, ...(s.alsoSymbols || [])].filter(Boolean), aliases: s.aliases || [] };
 }
+// Daily briefs: briefs/YYYY-MM-DD.md (gitignored) with a front-matter block (date, title, headline, asOf).
+// The latest 60 go inside the encrypted payload only. BRIEFS_DIR overrides the folder (tests use example briefs).
+const BRIEFS = process.env.BRIEFS_DIR || "briefs";
+base0.briefs = [];
+if (fs.existsSync(BRIEFS)) {
+  const files = fs.readdirSync(BRIEFS).filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f)).sort().reverse().slice(0, 60);
+  for (const f of files) {
+    const raw = fs.readFileSync(path.join(BRIEFS, f), "utf8").replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+    const m = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(raw);
+    if (!m) { console.warn(`Skipping brief ${f}: no front-matter block`); continue; }
+    const fm = {}; for (const line of m[1].split("\n")) { const k = /^([A-Za-z]+)\s*:\s*(.*)$/.exec(line); if (k) fm[k[1]] = k[2].trim().replace(/^(["'])(.*)\1$/, "$2"); }
+    const date = f.slice(0, 10);
+    if (fm.date && fm.date !== date) { console.warn(`Skipping brief ${f}: front-matter date doesn't match the file name`); continue; }
+    if (!fm.title || !fm.headline) { console.warn(`Skipping brief ${f}: front matter needs title and headline`); continue; }
+    base0.briefs.push({ date, title: fm.title, headline: fm.headline, asOf: fm.asOf || fm.asof || "", md: m[2].trim() });
+  }
+}
 base0.builtAt = new Date().toISOString();
 const plain = JSON.stringify(base0);
 
@@ -60,6 +77,15 @@ const probes = new Set();
 const d = JSON.parse(plain);
 for (const i of d.ideas) { probes.add(i.name); probes.add(i.thesis.slice(0, 30)); }
 probes.add(d.asOf);
+// brief text: titles, headlines and the first 30 characters of every substantial line (link targets stripped, since
+// a brief may cite the same public sites the app shell links to)
+for (const br of d.briefs || []) {
+  probes.add(br.title); probes.add(br.headline);
+  for (const line of br.md.split("\n")) {
+    const t = line.replace(/\]\([^)]*\)/g, "]").replace(/<?https?:\/\/\S+>?/g, "").replace(/^[\s#>*+\-\d.)|]+/, "").replace(/[*_`~[\]]/g, "").trim();
+    if (t.length >= 30) probes.add(t.slice(0, 30));
+  }
+}
 for (const a of Object.values(d.market?.assets || {})) { if (a.liveUrl) probes.add(a.liveUrl); if (a.stats?.url) probes.add(a.stats.url); }
 const GENERIC = new Set(["Coinbase"]);
 for (const n of Object.values(base0.match || {})) for (const a of n.aliases) if (a.length > 4) probes.add(a);
@@ -82,4 +108,4 @@ for (const f of walk(OUT)) {
   if (/sk-ant-[A-Za-z0-9]|xai-[A-Za-z0-9]{20}|sk-[A-Za-z0-9]{20}/.test(txt)) throw new Error(`Something that looks like an API key in ${f}`);
   if (txt.includes(pass)) throw new Error(`Passcode leak in ${f}`);
 }
-console.log(`Built ${OUT}/ (build ${buildId}): ${d.ideas.length} ideas encrypted, ${ITER} PBKDF2 iterations, no plaintext found in published files.`);
+console.log(`Built ${OUT}/ (build ${buildId}): ${d.ideas.length} ideas and ${d.briefs.length} brief${d.briefs.length === 1 ? "" : "s"} encrypted, ${ITER} PBKDF2 iterations, no plaintext found in published files.`);

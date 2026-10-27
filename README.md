@@ -41,17 +41,40 @@ price history, fundamentals and FX are fetched at build time and stored inside t
   FX: ECB reference rates via Frankfurter (`node scripts/fetch-market-data.mjs market-symbols.json market.json --fx-only` refreshes FX only).
   Anything unavailable is recorded in `market.json.missing` and shown as "Not available", never estimated.
 - `build.mjs`: `data.json` + `market.json` (+ matching hints from `market-symbols.json`: `yahoo`, `alsoSymbols`, `aliases`) + `publish.json` (`{"schedule": "Weekdays ~7:00 UK"}`) → `site/` (encrypted). Reads the passcode only from `$DASHBOARD_PASSCODE`.
+- `briefs/YYYY-MM-DD.md`: the daily morning brief (plaintext markdown, **gitignored, never committed**). `build.mjs` encrypts the latest 60
+  into `data.enc.json` for the in-app **Brief** view. Override the folder with `BRIEFS_DIR=…`.
 - GitHub Pages serves the **`gh-pages`** branch root; `main` mirrors it plus tooling.
+
+## Daily brief file format
+```
+---
+date: 2026-10-27
+title: Invest Intel, Tue 27 Oct
+headline: One line shown big at the top of the Brief view
+asOf: 07:00 UK
+---
+## Top line
+Markdown body: `##`/`###` headings, **bold**, *italic*, `-`/`1.` lists, [links](https://…) and bare https URLs.
+## Score changes
+- Example Co: 7.4 → 7.9 (why)        <- "Name: old → new" lines (→, ->, or "to") become tappable chips
+## Your holding
+...
+```
+- The file name must equal `date`; `title` and `headline` are required, otherwise the build skips the file with a warning.
+- Raw HTML is not rendered (shown as text); links open in a new tab with `rel="noopener noreferrer"`.
+- Idea names, aliases (4+ chars) and tickers in the text link to the idea; the "Your holdings today" panel cross-references
+  names in the brief with the on-device portfolio (holdings never leave the device).
 
 ## Daily refresh (routine)
 1. Save the canvas source (ReadCanvas) to `canvas-source.txt`
 2. `node scripts/extract-data.mjs canvas-source.txt data.json`
 3. `node scripts/fetch-market-data.mjs market-symbols.json market.json`
-4. `node build.mjs data.json` (needs `DASHBOARD_PASSCODE` in the environment; never pass it on the command line)
-5. Push `site/data.enc.json` and `site/sw.js` to `gh-pages` (and `main`). Push the other shell files only when the app code changes
+4. Write today's brief to `briefs/YYYY-MM-DD.md` (format above) — the exact text sent to Ben, including source links.
+5. `node build.mjs data.json` (needs `DASHBOARD_PASSCODE` in the environment; never pass it on the command line)
+6. Push `site/data.enc.json` and `site/sw.js` to `gh-pages` (and `main`). Never push or commit `briefs/`. Push the other shell files only when the app code changes
    (push `sw.js` last so the new service worker caches the new shell).
 
-The build fails if any published file contains idea names, theses, matching aliases, listing symbols, something shaped like an API key,
+The build fails if any published file contains idea names, theses, brief titles/headlines/lines, matching aliases, listing symbols, something shaped like an API key,
 or any file outside the app-shell allow-list.
 
 The salt is reused across builds so remembered devices stay unlocked; run `node build.mjs data.json --new-salt` after changing the passcode.
