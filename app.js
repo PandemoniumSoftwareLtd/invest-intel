@@ -86,7 +86,7 @@
   async function lockNow() {
     // drop every decrypted object from memory before reloading
     try { if (AU.ctl) AU.ctl.abort(); } catch {}
-    P = null; A = null; AU.draft = ""; IMP = null; D = null; pending = null;
+    P = null; A = null; AU.draft = ""; IMP = null; try { if (RV.ctl) RV.ctl.abort(); } catch {} REV = null; D = null; pending = null;
     try { if (SHOTS.ctl) SHOTS.ctl.abort(); } catch {} dropShots();
     const v = $("#view"); if (v) v.innerHTML = ""; closeSheet();
     await clearKey(); currentKey = null; location.reload();
@@ -515,7 +515,7 @@
     if (!VS.needPass) {
       try {
         P = (await vaultLoad("portfolio")) || newPortfolio();
-        const ai = await vaultLoad("ai"), chat = await vaultLoad("chat");
+        const ai = await vaultLoad("ai"), chat = await vaultLoad("chat"); REV = await vaultLoad("review");
         A = { cfg: Object.assign({ provider: "anthropic", models: {}, keys: {} }, ai || {}), msgs: (chat && chat.msgs) || [] };
         VS.ready = true;
       } catch (e) { VS.err = "Could not open the on-device vault (" + (e.message || "decrypt failed") + ")."; }
@@ -536,7 +536,7 @@
     if (!VS.ready) return `<div class="card muted">Opening on-device vault…</div>`;
     const st0 = Object.keys(VS.stale);
     if (st0.length) return `<form class="card gate" data-form="stalepass"><div class="gic">↺</div><h3>Bring across your saved data</h3>
-      <p class="muted">Your ${esc(st0.map((n) => ({ portfolio: "portfolio", ai: "analyst settings", chat: "chat history" }[n])).join(", "))} on this device was encrypted with your previous passcode. Enter that passcode to re-encrypt it with the current one.</p>
+      <p class="muted">Your ${esc(st0.map((n) => ({ portfolio: "portfolio", ai: "analyst settings", chat: "chat history", review: "saved AI review" }[n])).join(", "))} on this device was encrypted with your previous passcode. Enter that passcode to re-encrypt it with the current one.</p>
       <input type="password" name="pass" placeholder="Previous passcode" autocomplete="off" aria-label="Previous passcode" required>
       <div class="srow"><button class="btn primary" type="submit">Restore</button><button class="btn" type="button" data-act="discardStale">Start fresh instead</button></div><p class="err" data-err></p></form>`;
     return "";
@@ -663,6 +663,7 @@
       <div><div class="tk">Quantity</div><b>${esc(qtyFmt(q))}</b></div><div><div class="tk">Value</div><b>${esc(bm(v))}</b></div>
       <div><div class="tk">P/L</div><b class="${pl > 0 ? "pos" : pl < 0 ? "neg" : ""}">${esc(bmS(pl))}${pl != null && cost ? ` <span class="small">(${pct(pl / cost * 100)})</span>` : ""}</b></div>
       <div><div class="tk">Weight</div><b>${w != null ? w.toFixed(1) + "%" : "—"}</b></div></div>
+      ${reviewPosition(i)}
       <div class="tk">${esc(SRC_LABEL[rs[0].src])} · on this device only</div></div>`;
   }
 
@@ -885,10 +886,15 @@
       <input type="password" name="pass" autocomplete="off" placeholder="Backup passcode" aria-label="Backup passcode" required autofocus><p class="err" data-err></p>
       <div class="shf"><button class="btn" type="button" data-close>Cancel</button><button class="btn primary" type="submit">Open backup</button></div></form>`;
     else if (sheetKind === "restore") h = restoreSheet();
+    else if (sheetKind === "rules") h = rulesSheet();
+    else if (sheetKind === "week") h = weekSheet();
+    else if (sheetKind === "pos") h = posSheet();
+    else if (sheetKind === "aiReview") h = aiReviewSheet();
     else if (sheetKind === "context") h = sheetHead("What the analyst sees", `Sent to ${esc(PROVIDERS[A.cfg.provider].label)} with your next message`) + `<div class="shb"><div class="tk">${(sheetData.length / 1000).toFixed(1)}k characters (≈${Math.round(sheetData.length / 3.8 / 1000)}k tokens)</div><pre class="ctxpre">${esc(sheetData)}</pre></div>`;
-    el.innerHTML = h; el.classList.toggle("wide", sheetKind === "import" && !!IMP && IMP.kind === "shots");
+    el.innerHTML = h; el.classList.toggle("wide", (sheetKind === "import" && !!IMP && IMP.kind === "shots") || sheetKind === "aiReview" || sheetKind === "rules");
     if (sheetKind === "shots") for (const i of SHOTS.imgs) { const t = el.querySelector(`[data-thumb="${i.id}"]`); if (t && i.thumb) t.prepend(i.thumb); }
     el.querySelectorAll("[data-w]").forEach((x) => { x.style.width = x.dataset.w + "%"; });
+    el.querySelectorAll("[data-l]").forEach((x) => { x.style.left = x.dataset.l + "%"; });
   }
   function openMore() { openSheet("more"); }
 
@@ -1169,10 +1175,17 @@ Rules:
   let restoreText = null;
   async function onSheetClick(e) {
     const go = e.target.closest("[data-tab-go]"); if (go) { goTab(go.dataset.tabGo); return; }
+    // review sheets reuse main-view controls: open an idea, edit a holding, or run a main action
+    if (!e.target.closest("[data-sheet-act]")) {
+      const op = e.target.closest("[data-open]"); if (op) { closeSheet(true); openDetail(op.dataset.open); return; }
+      const ed = e.target.closest("[data-edit]"); if (ed) { const h = P && P.holdings.find((x) => x.id === ed.dataset.edit); if (h) { sheetKind = "edit"; sheetData = { id: h.id, h: { ...h } }; paintSheet(); } return; }
+      const xa = e.target.closest("[data-act]"); if (xa && EXTRA_ACTS[xa.dataset.act]) { if (!["aiReview", "aiOpen", "posSheet", "weekList", "sizingRules"].includes(xa.dataset.act)) closeSheet(true); EXTRA_ACTS[xa.dataset.act](xa, e); return; }
+    }
     const mode = e.target.closest("[data-imp-mode]"); if (mode) { IMP.mode = mode.dataset.impMode; paintSheet(); return; }
     const pick = e.target.closest("[data-pick]");
     if (pick) { const i = D.ideas.find((x) => keyOf(x) === pick.dataset.pick); const fm = $("#sheet form"); if (i && fm) { fm.sym.value = i.ticker.split(" / ")[0]; fm.name.value = i.name; fm.link.value = keyOf(i); const pc = mkt(i) && mkt(i).price && normCcy(mkt(i).price.currency); if (pc && !isCryptoIdea(i)) fm.ccy.value = pc; $("#sheet [data-sugg]").innerHTML = ""; fm.qty.focus(); } return; }
     const b = e.target.closest("[data-sheet-act]"); if (!b) return; const a = b.dataset.sheetAct;
+    if (reviewSheetClick(b)) return;
     try {
       if (a === "chooseCsv") { closeSheet(true); pickCsv(); return; }
       if (a === "chooseShots") { sheetKind = "shots"; dropShots(); paintSheet(); return; }
@@ -1256,15 +1269,16 @@ Rules:
       ${c.byCcy.length > 1 ? `<h3>Currency exposure</h3><div class="card">${expBars(c.byCcy, "ccy")}<div class="tk">FX: ${esc((D.market && D.market.fx && D.market.fx.source) || "n/a")}${D.market && D.market.fx ? ", " + esc(dLabel(D.market.fx.date)) : ""}</div></div>` : ""}
       ${c.gaps.length ? `<h3>Top-rated ideas you don't hold</h3><div class="card list">${c.gaps.map((i) => `<button class="item gap" data-open="${esc(keyOf(i))}"><div class="body"><div class="ttl"><b>${esc(i.name)}</b> <span class="tk">${esc(i.ticker)}</span></div><div class="det">${esc(i.trigger)}</div></div><div class="gs">${pill(i.action, ACTION_TONE[i.action])}<b>${fmt(score10(i))}</b></div></button>`).join("")}</div>` : ""}`;
   }
-  function holdingRow(r) {
-    const h = r.h, i = r.mt && r.mt.i, k = i ? keyOf(i) : null;
+  function holdingRow(r, R, scale) {
+    const h = r.h, i = r.mt && r.mt.i, k = i ? keyOf(i) : null, g = R ? R.byId.get(h.id) : null;
     const plp = r.pl != null && r.cost ? r.pl / r.cost * 100 : null;
-    const open = k ? `data-open="${esc(k)}"` : `data-edit="${esc(h.id)}"`;
+    const open = k ? `data-open="${esc(k)}"` : g ? `data-act="posSheet" data-g="${esc(g.k)}"` : `data-edit="${esc(h.id)}"`;
+    const chg = !g ? "" : g.dec === "Review" ? (g.unrated ? "Not on the dashboard: review it" : "No price: add one to size it") : g.dec === "Hold" ? `Hold · range ${pct1(g.lo)}–${pct1(g.hi)}` : g.short || g.change;
     return `<div class="hrow${st.detail && st.detail === k ? " sel" : ""}">
-      <button class="hold hmain" ${open} aria-label="${esc((h.name || h.sym) + (i ? ", open idea" : ", edit"))}">
+      <button class="hold hmain" ${open} aria-label="${esc((h.name || h.sym) + (g ? ", " + g.dec : "") + (i ? ", open idea" : g ? ", open position" : ", edit"))}">
         <div class="hn"><span class="hsym">${esc(h.sym || "—")}</span><span class="hname">${esc(h.name && h.name !== h.sym ? h.name : "")}</span></div>
-        <div class="hmeta">${i ? `${pill(i.action, ACTION_TONE[i.action])}<span class="hsc">${fmt(score10(i))}</span>` : `<span class="pill t-neutral">Not on dashboard</span>`}<span class="tk">${esc(qtyFmt(h.qty))}${r.px != null ? " × " + esc(money(r.px, r.pxCcy)) : ""}</span></div>
-        <div class="hw"><span class="track"><span class="fill" data-w="${r.w != null ? r.w.toFixed(1) : 0}"></span></span></div>
+        <div class="hmeta">${g ? decPill(g.dec) : ""}${i ? `${pill(i.action, ACTION_TONE[i.action])}<span class="hsc">${fmt(score10(i))}</span>` : `<span class="pill t-neutral">Not on dashboard</span>`}<span class="tk">${esc(qtyFmt(h.qty))}${r.px != null ? " × " + esc(money(r.px, r.pxCcy)) : ""}</span></div>
+        ${g ? `<div class="hw2">${targetBar(g, scale)}<span class="hchg c-${g.dec.toLowerCase()}">${esc(chg)}</span></div>` : `<div class="hw"><span class="track"><span class="fill" data-w="${r.w != null ? r.w.toFixed(1) : 0}"></span></span></div>`}
       </button>
       <div class="hval">${r.v != null ? `<b>${esc(bm(r.v))}</b>` : `<span class="nopx">No price</span>`}
         ${r.pl != null ? `<span class="${r.pl > 0 ? "pos" : r.pl < 0 ? "neg" : "tk"}">${esc(bmS(r.pl))}${plp != null ? ` · ${pct(plp)}` : ""}</span>` : r.v != null ? `<span class="tk">No cost</span>` : ""}
@@ -1289,7 +1303,7 @@ Rules:
         <div class="item"><div class="lead">IBKR</div><div class="body">Reports → Activity statement → CSV (uses the Open Positions section).</div></div>
         <div class="item"><div class="lead">Coinbase</div><div class="body">Profile → Statements → Transaction history (CSV).</div></div>
         <div class="item"><div class="lead">Trackers</div><div class="body">Sharesight, Snowball, Delta and similar: export holdings to CSV, then map the columns.</div></div></div>`;
-    const c = pfCalc(), wide = isWide();
+    const c = pfCalc(), wide = isWide(), R = reviewCalc(c), scale = barScale(R), shown = sortRows(c.rows, R);
     const plp = c.costTot ? c.plTot / c.costTot * 100 : null;
     const kpis = `<div class="kpis pk">
       <div class="kpi"><div class="kl">Value</div><div class="kv1 big">${esc(bm(c.total, 0))}</div><div class="ks">${c.priced.length}/${n} priced · ${esc(P.base)}</div></div>
@@ -1299,8 +1313,9 @@ Rules:
     const flags = c.flags.length ? `<h3>Decision flags</h3><div class="card list flags">${c.flags.map((f) => `<${f.k ? `button data-open="${esc(f.k)}"` : "div"} class="item fl f-${f.tone}"><span class="fdot" aria-hidden="true"></span><div class="body"><div class="ttl">${esc(f.t)}</div>${f.d ? `<div class="det">${esc(f.d)}</div>` : ""}</div>${f.k ? `<span class="chev">›</span>` : ""}</${f.k ? "button" : "div"}>`).join("")}</div>` : "";
     const good = c.good.length ? `<h3>Held and rated well</h3><div class="card list">${c.good.map((r) => `<button class="item" data-open="${esc(keyOf(r.mt.i))}"><div class="body"><div class="ttl">You hold <b>${esc(r.mt.i.name)}</b>${r.w != null ? ` (${r.w.toFixed(1)}%)` : ""}, rated ${esc(r.mt.i.action)} ${fmt(score10(r.mt.i))}</div><div class="det">${esc(r.mt.i.trigger)}</div></div><span class="chev">›</span></button>`).join("")}</div>` : "";
     const base = `<div class="chips basec">${["GBP", "USD", "EUR"].map((b) => `<button data-act="base" data-val="${b}" class="${P.base === b ? "on" : ""}">${b}</button>`).join("")}</div>`;
-    return `<div class="phead"><div><h2>Portfolio</h2><div class="tk">🔒 This device only · prices as of ${esc(D.asOf.replace(/^[A-Z][a-z]{2} /, ""))}</div></div>${base}</div>${tools}${kpis}${flags}
-      <h3>Holdings <span class="tk">(${n})</span></h3><div class="card hlist">${c.rows.map(holdingRow).join("")}</div>
+    return `<div class="phead"><div><h2>Portfolio</h2><div class="tk">🔒 This device only · prices as of ${esc(D.asOf.replace(/^[A-Z][a-z]{2} /, ""))}</div></div>${base}</div>${tools}${kpis}${reviewSummary(c, R)}
+      <h3 id="holdings">Holdings <span class="tk">(${shown.length === n ? n : shown.length + " of " + n})</span></h3>${holdingsToolbar()}<div class="card hlist">${shown.length ? shown.map((r) => holdingRow(r, R, scale)).join("") : `<div class="muted small pad">No holdings with this decision.</div>`}</div>
+      <div class="tk pnote">Bars: <span class="lgk cur"></span> current weight, <span class="lgk band"></span> target range, <span class="lgk tgt"></span> target after the change, on one scale. <button class="lnk" data-act="sizingRules">How sizing works</button></div>${flags}
       <div class="tk pnote">Values use dashboard prices where a holding matches an idea, otherwise a manual price or the value in your broker file (dated). Holdings without either are marked <span class="nopx">No price</span> and left out of totals. FX: ECB reference rates.</div>
       ${good}${wide ? "" : portfolioSide(c)}
       <div class="note mt12"><b>Research, not regulated financial advice.</b> Flags compare your holdings with the dashboard's ratings as of ${esc(D.asOf)}.</div>`;
@@ -1598,6 +1613,10 @@ How to answer:
         for (const [n, rec] of Object.entries(VS.stale)) { const old = await keyFrom(f.pass.value, rec.salt, rec.iterations || payload.iterations); let o; try { o = await openWith(old, rec); } catch { throw new Error("That isn't the previous passcode."); } delete VS.stale[n]; await vaultSave(n, o); }
         await openVault(); toast("Saved data restored"); return;
       }
+      if (k === "revcap") {
+        const v = parseFloat(f.cap.value); if (!(v >= 2 && v <= 40)) throw new Error("Enter a cap between 2% and 40%.");
+        P.review = { ...(P.review || {}), customCap: half(v) }; await savePortfolio(); render(); toast(`Top cap set to ${pct1(half(v))}`); return;
+      }
       if (k === "ai") {
         const pvId = curCfg().provider, model = f.model.value === "__custom" ? f.custom.value.trim() : f.model.value, key = f.key.value.trim();
         if (!model) throw new Error("Enter a model ID.");
@@ -1626,8 +1645,328 @@ How to answer:
       catch (e) { msg.className = "err"; msg.textContent = e.name === "AbortError" ? "Timed out" : errText(e, curCfg()); } finally { b.disabled = false; }
     },
     aiRemove: async () => { if (!confirm("Remove the saved API key from this device?")) return; delete A.cfg.keys[curCfg().provider]; await saveAI(); render(); toast("Key removed"); },
-    wipeLocal: async () => { if (!confirm("Delete your holdings, chat history and AI key from this device? This can't be undone (export a backup first).")) return; for (const n of ["portfolio", "ai", "chat"]) await vdel(n); AU.focus = null; await openVault(); toast("On-device data deleted"); },
+    wipeLocal: async () => { if (!confirm("Delete your holdings, chat history, AI review and AI key from this device? This can't be undone (export a backup first).")) return; for (const n of ["portfolio", "ai", "chat", "review"]) await vdel(n); REV = null; AU.focus = null; await openVault(); toast("On-device data deleted"); },
   });
+  // =====================================================================================
+  // Holdings review: a transparent, on-device decision engine (no AI key needed) that turns the
+  // dashboard's scores and ratings plus each position's size, P/L and concentration into one
+  // decision per holding, with a target weight and the concrete change. Optional AI deep dive
+  // sends the engine output to the user's own provider; the last AI review is cached encrypted.
+  // =====================================================================================
+  const DECS = ["Add", "Hold", "Trim", "Sell", "Review"];
+  const DEC_TONE = { Add: "success", Hold: "neutral", Trim: "warning", Sell: "danger", Review: "accent" };
+  const DEC_ORDER = { Sell: 0, Trim: 1, Add: 2, Review: 3, Hold: 4 };
+  const PROFILES = {
+    Cautious: { mult: 2 / 3, theme: 30, ccy: 50, gain: 30, blurb: "Smaller caps, earlier profit-taking" },
+    Balanced: { mult: 1, theme: 35, ccy: 60, gain: 50, blurb: "The reference caps" },
+    Aggressive: { mult: 1.25, theme: 35, ccy: 70, gain: 50, blurb: "Larger caps for high scorers" },
+  };
+  const BANDS = [[8, 12, "8+"], [7, 8, "7–8"], [6, 5, "6–7"]]; // [min score, Balanced cap %, label]; below 6 = exit
+  const half = (x) => Math.round(x * 2) / 2;
+  const revPrefs = () => { const r = (P && P.review) || {}; return { profile: PROFILES[r.profile] ? r.profile : "Aggressive", customCap: r.customCap > 0 ? +r.customCap : null }; };
+  function capTable() {
+    const pr = revPrefs(), p = PROFILES[pr.profile], top = pr.customCap || 12 * p.mult;
+    return BANDS.map(([s, c, l]) => ({ min: s, label: l, cap: half(c / 12 * top) }));
+  }
+  const capFor = (s) => { const b = capTable().find((x) => s >= x.min); return b ? b.cap : 0; };
+  const pct1 = (v) => (v == null ? "—" : (Math.round(v * 10) / 10).toFixed(1).replace(/\.0$/, "") + "%");
+  function catDate(t) {
+    const m = /(\d{1,2})(?:\s*[–-]\s*\d{1,2})?\s+([A-Z][a-z]{2})/.exec(t || ""); if (!m || MONTHS.indexOf(m[2]) < 0) return null;
+    const b = asOfDate(); let d = new Date(b.getFullYear(), MONTHS.indexOf(m[2]), +m[1]); if (d - b < -180 * 864e5) d = new Date(b.getFullYear() + 1, MONTHS.indexOf(m[2]), +m[1]); return d;
+  }
+  // upcoming catalysts for a name (its own next catalyst plus calendar events naming it; crypto-wide events for crypto ideas)
+  function upcoming(i, days = 21) {
+    const b = asOfDate(), e = new Date(b); e.setDate(e.getDate() + days); const out = [];
+    const d0 = catDate(i.catalystDate); if (d0 && d0 >= b && d0 <= e) out.push({ d: d0, label: i.catalystDate, t: i.catalyst });
+    const keys = [i.name, ...i.ticker.split(/\s*\/\s*/)].map((x) => x.trim()).filter((x) => x.length >= 3);
+    for (const c of D.catalysts) {
+      const d = new Date(c.date + "T00:00:00"); if (d < b || d > e) continue;
+      const txt = c.event + " " + c.why, named = keys.some((k) => new RegExp("\\b" + k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b", "i").test(txt));
+      if (named || (c.type === "Crypto" && i.theme === "Crypto")) if (!out.some((o) => o.t === c.event)) out.push({ d, label: c.label || dLabel(c.date), t: c.event });
+    }
+    return out.sort((a, b2) => a.d - b2.d);
+  }
+  const unitWord = (g) => (g.i && isCryptoIdea(g.i) ? "units" : "shares");
+  function shareText(g, money) {
+    if (!g.pxBase || !g.qty) return "";
+    const n = Math.abs(money) / g.pxBase, intish = Math.abs(g.qty - Math.round(g.qty)) < 1e-6 && g.qty >= 1;
+    if (intish) return n < 1 ? ` / under 1 ${unitWord(g).replace(/s$/, "")}` : ` / ${Math.round(n).toLocaleString("en-GB")} ${unitWord(g)}`;
+    return ` / ${qtyFmt(+n.toPrecision(3))} ${unitWord(g)}`;
+  }
+  function reviewCalc(c) {
+    c = c || pfCalc(); const pr = revPrefs(), prof = PROFILES[pr.profile], total = c.total;
+    const themeW = Object.fromEntries(c.byTheme.map((x) => [x.k, x.w])), hotThemes = c.byTheme.filter((x) => x.k !== "Not on dashboard" && x.w > prof.theme && c.priced.length > 1);
+    const hotCcy = c.byCcy.filter((x) => x.k !== P.base && x.k !== "?" && x.w > prof.ccy && c.priced.length > 1);
+    const G = new Map();
+    for (const r of c.rows) { const k = r.mt ? "i:" + keyOf(r.mt.i) : "h:" + r.h.id; if (!G.has(k)) G.set(k, { k, i: r.mt ? r.mt.i : null, rows: [] }); G.get(k).rows.push(r); }
+    const out = [];
+    for (const g of G.values()) {
+      const pr0 = g.rows.filter((r) => r.v != null); g.v = pr0.length ? pr0.reduce((a, r) => a + r.v, 0) : null; g.partial = pr0.length > 0 && pr0.length < g.rows.length;
+      g.w = g.v != null && total > 0 ? g.v / total * 100 : null;
+      g.cost = g.rows.every((r) => r.cost != null) ? g.rows.reduce((a, r) => a + r.cost, 0) : null; g.pl = g.v != null && g.cost != null && !g.partial ? g.v - g.cost : null; g.plp = g.pl != null && g.cost ? g.pl / g.cost * 100 : null;
+      g.qty = g.rows.every((r) => r.h.qty != null) ? g.rows.reduce((a, r) => a + r.h.qty, 0) : null; g.pxBase = g.v != null && g.qty && !g.partial ? g.v / g.qty : null;
+      g.src = g.rows[0].src; g.dash = g.rows.every((r) => r.src === "dash");
+      g.name = g.i ? g.i.name : g.rows[0].h.name || g.rows[0].h.sym || "Holding"; g.sym = g.i ? g.i.ticker.split(" / ")[0] : g.rows[0].h.sym || ""; g.ids = g.rows.map((r) => r.h.id);
+      g.day = g.i && g.dash && mkt(g.i) && mkt(g.i).price ? mkt(g.i).price.change1d : null;
+      g.notes = []; g.rules = [];
+      decide(g, { prof, pr, themeW, hotThemes, hotCcy, total });
+      out.push(g);
+    }
+    const acts = out.filter((g) => g.money);
+    const big3 = [...acts].sort((a, b) => Math.abs(b.money) - Math.abs(a.money)).slice(0, 3);
+    const counts = Object.fromEntries(DECS.map((d) => [d, out.filter((g) => g.dec === d).length]));
+    const week = [...out].filter((g) => g.dec !== "Hold").sort((a, b) => DEC_ORDER[a.dec] - DEC_ORDER[b.dec] || Math.abs(b.money || 0) - Math.abs(a.money || 0));
+    const byK = new Map(); for (const g of out) for (const id of g.ids) byK.set(id, g);
+    return { groups: out, big3, counts, week, hotThemes, hotCcy, byId: byK, prof, pr, caps: capTable(), total };
+  }
+  function decide(g, X) {
+    const i = g.i; g.to = null; g.lo = null; g.hi = null; g.money = 0; g.dw = null;
+    if (!i) { g.dec = "Review"; g.reason = g.v == null ? "Not on the dashboard and no price: nothing to size against" : "Not on the dashboard: no score or rating to size against"; g.rules.push("Unrated holdings get Review"); g.conv = null; g.unrated = true; return; }
+    const s = score10(i) / 10, cap = capFor(s), act = i.action; g.score = s; g.cap = cap; g.act = act;
+    const cats = upcoming(i); g.cats = cats;
+    if (g.v == null) { g.dec = "Review"; g.reason = `Rated ${act} ${s.toFixed(1)}, but no price or value: can't size it`; g.rules.push("Unpriced holdings get Review"); g.conv = null; g.unpriced = true; return; }
+    const w = g.w, topR = (act === "Buy" || act === "Accumulate on dips") && s >= 7, lo = topR ? half(cap * 0.6) : 0, tw = X.themeW[i.theme] || 0;
+    const hotT = X.hotThemes.some((t) => t.k === i.theme);
+    let dec = "Hold", to = null, conv = "Medium";
+    g.lo = lo; g.hi = cap;
+    if (act === "Avoid") { dec = "Sell"; to = 0; conv = "High"; g.rules.push("Avoid-rated holdings get sold"); g.reason = `Rated Avoid (${s.toFixed(1)}/10) at ${pct1(w)} of the portfolio`; }
+    else if (s < 6) { dec = "Sell"; to = 0; conv = s < 5 ? "High" : "Medium"; g.rules.push("Score below 6 aims to exit"); g.reason = `Score ${s.toFixed(1)}/10 is below 6, the level the sizing rules exit at`; }
+    else if (act === "Trim") { dec = "Trim"; to = half(Math.min(cap, w / 2)); conv = w > cap ? "High" : "Medium"; g.rules.push(`Trim-rated holdings are halved, and never left above the ${pct1(cap)} cap`); g.reason = `Rated Trim (${s.toFixed(1)}/10) at ${pct1(w)}`; }
+    else if (w > cap + Math.max(0.5, cap * 0.1)) { dec = "Trim"; to = cap; conv = w > cap * 1.5 ? "High" : "Medium"; g.rules.push(`A ${s.toFixed(1)} score caps the position at ${pct1(cap)}`); g.reason = `${pct1(w)} of the portfolio vs a ${pct1(cap)} cap for a ${s.toFixed(1)} score (${act})`; }
+    else if (topR && w < lo) {
+      if (hotT) { dec = "Hold"; conv = "Medium"; g.rules.push(`No adds while a theme is above ${X.prof.theme}%`); g.reason = `Rated ${act} ${s.toFixed(1)} and under target, but ${i.theme} is already ${pct1(tw)} of the portfolio`; }
+      else { dec = "Add"; to = half(cap * 0.8); conv = s >= 8 && i.s.t >= 7 ? "High" : "Medium"; g.rules.push("Top scorers below 60% of their cap get added to"); g.reason = `Rated ${act} ${s.toFixed(1)}/10 at only ${pct1(w)} vs a ${pct1(lo)}–${pct1(cap)} range`; }
+    } else { dec = "Hold"; conv = s >= 8 ? "High" : "Medium"; g.rules.push("Inside the range for its score"); g.reason = `Rated ${act} ${s.toFixed(1)}/10 at ${pct1(w)}, inside the ${pct1(lo)}–${pct1(cap)} range`; }
+    // profit-taking on low scorers with big unrealised gains
+    if (s < 7 && g.plp != null && g.plp >= X.prof.gain) {
+      g.gainFlag = true;
+      if (dec === "Hold") { dec = "Trim"; to = half(w * 0.75); g.rules.push(`Scores below 7 with gains of ${X.prof.gain}%+ take a quarter off`); g.reason = `${pct(g.plp, 0)} unrealised on a ${s.toFixed(1)} score (${act}): bank some of the gain`; }
+      else g.notes.push(`Locks in part of a ${pct(g.plp, 0)} unrealised gain`);
+    }
+    if (dec === "Trim" && to != null && w - to < 0.25) { dec = "Hold"; to = null; g.rules.push("Changes under 0.25% of the portfolio are ignored"); }
+    if (hotT) g.notes.push(`${i.theme} is ${pct1(tw)} of the portfolio (flag above ${X.prof.theme}%)`);
+    const cc = g.rows[0].src === "dash" ? normCcy(g.rows[0].pxCcy) : normCcy(g.rows[0].h.valueCcy || g.rows[0].h.ccy), hc = X.hotCcy.find((x) => x.k === (cc === "GBp" ? "GBP" : cc));
+    if (hc && dec === "Add") g.notes.push(`Adds to ${hc.k}, already ${pct1(hc.w)} of the portfolio`);
+    if (act === "Accumulate on dips" && dec === "Add") g.notes.push(`Rated Accumulate on dips: stage it. Trigger: ${i.trigger}`);
+    if (g.day != null && Math.abs(g.day) >= 5) g.notes.push(`${pct(g.day, 1)} on the day: ${dec === "Add" ? "consider staging the add" : dec === "Sell" || dec === "Trim" ? "consider staging the sale" : "watch the move"}`);
+    if (cats.length) g.notes.push(`Next: ${cats[0].label}, ${cats[0].t}${cats.length > 1 ? ` (+${cats.length - 1} more within 3 weeks)` : ""}`);
+    if (!g.dash || g.partial) { conv = conv === "High" ? "Medium" : "Low"; g.notes.push(g.partial ? "Some lines have no price and are left out of the weight" : `Sized on a ${SRC_LABEL[g.src].toLowerCase()}, not today's dashboard price`); }
+    if (g.rows.length > 1) g.notes.push(`Combined across ${g.rows.length} lines`);
+    g.dec = dec; g.to = to; g.conv = conv;
+    if (to != null) {
+      g.dw = to - w; g.money = g.dw / 100 * X.total;
+      const m = Math.abs(g.money), amt = `about ${bm(m, 0)}${shareText(g, m)}`;
+      g.change = dec === "Sell" ? `Sell all (${amt})` : dec === "Add" ? `Add ~${pct1(Math.abs(g.dw))} of portfolio (${amt}) to reach ${pct1(to)}` : `Trim ~${pct1(Math.abs(g.dw))} of portfolio (${amt}) to reach ${pct1(to)}`;
+      if (dec === "Sell") { g.money = -g.v; g.dw = -w; }
+      g.short = dec === "Sell" ? `Sell all · ${bm(m, 0)}` : `${dec} ~${pct1(Math.abs(g.dw))} · ${bm(m, 0)} → ${pct1(to)}`;
+      if (dec === "Trim") g.lo = Math.min(g.lo, to), g.hi = to;
+      if (dec === "Sell") { g.lo = 0; g.hi = 0; }
+    } else g.change = dec === "Hold" ? "No change" : "";
+  }
+  const decPill = (d, extra) => `<span class="dec d-${d.toLowerCase()}${extra ? " " + extra : ""}">${esc(d)}</span>`;
+  // current weight vs target range on one shared scale
+  function targetBar(g, scale) {
+    if (g.w == null) return `<span class="tbar empty"><span class="tnone">No weight</span></span>`;
+    const L = (x) => Math.max(0, Math.min(100, x / scale * 100)).toFixed(1);
+    const band = g.dec === "Review" ? "" : `<span class="tband b-${g.dec.toLowerCase()}" data-l="${L(g.lo || 0)}" data-w="${Math.max(0.8, L(g.hi) - L(g.lo || 0)).toFixed(1)}"></span>`;
+    const tgt = g.to != null ? `<span class="ttgt" data-l="${L(g.to)}"></span>` : "";
+    return `<span class="tbar" role="img" aria-label="Weight ${pct1(g.w)}${g.hi != null ? `, target ${pct1(g.lo)} to ${pct1(g.hi)}` : ""}">${band}<span class="tcur" data-w="${L(g.w)}"></span>${tgt}</span>`;
+  }
+  const barScale = (R) => Math.max(10, ...R.groups.map((g) => Math.max(g.w || 0, g.cap || 0))) * 1.08;
+  function moneyChip(g) { return g.money ? `<span class="mv ${g.money > 0 ? "pos" : "neg"}">${g.money > 0 ? "+" : "−"}${esc(bm(Math.abs(g.money), 0))}</span>` : ""; }
+  const openAttr = (g) => (g.i ? `data-open="${esc(keyOf(g.i))}"` : `data-act="posSheet" data-g="${esc(g.k)}"`);
+  function reviewSummary(c, R) {
+    const n = R.groups.length, cap = R.caps.map((b) => pct1(b.cap)).join(" / ");
+    const counts = DECS.map((d) => `<button class="rc${st.pfDec === d ? " on" : ""}" data-set="pfDec" data-val="${st.pfDec === d ? "All" : d}" aria-pressed="${st.pfDec === d}">${decPill(d)}<b>${R.counts[d]}</b></button>`).join("");
+    const big = R.big3.length ? R.big3.map((g) => `<button class="rbig" ${openAttr(g)}>${decPill(g.dec)}<span class="rbn"><b>${esc(g.name)}</b><span class="tk">${esc(g.change)}</span></span>${moneyChip(g)}</button>`).join("") : `<div class="muted small">No trades suggested: every priced holding is inside its range.</div>`;
+    const flags = [...R.hotThemes.map((t) => `${t.k} is ${pct1(t.w)} of the portfolio (above ${R.prof.theme}%)`), ...R.hotCcy.map((x) => `${pct1(x.w)} in ${x.k} (above ${R.prof.ccy}%)`)];
+    const ai = REV && REV.summary != null ? `<button class="railine" data-act="aiOpen"><span class="sgl sm" aria-hidden="true">✦</span><span><b>AI review</b><span class="tk">${esc(PROVIDERS[REV.provider] ? PROVIDERS[REV.provider].label : "")} · ${esc(new Date(REV.ts).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }))}</span></span><span class="chev">›</span></button>` : "";
+    return `<div class="card revsum"><div class="rsh"><div><div class="kl">Holdings review</div><div class="tk">${n} position${n === 1 ? "" : "s"} · ${esc(R.pr.profile)}${R.pr.customCap ? " (custom cap)" : ""} · caps ${esc(cap)} · on this device</div></div>
+      <button class="btn sm aib" data-act="aiReview"><span aria-hidden="true">✦</span> Get AI review</button></div>
+      <div class="rcounts" role="group" aria-label="Filter holdings by decision">${counts}</div>
+      ${flags.length ? `<div class="rflags">${flags.map((f) => `<span class="rfl">⚠ ${esc(f)}</span>`).join("")}</div>` : ""}
+      <div class="kl mt6">Biggest moves</div><div class="rbigs">${big}</div>
+      <div class="srow rfoot"><button class="btn primary" data-act="weekList">What to do this week <span class="cnt">${R.week.length}</span></button><button class="lnk" data-act="sizingRules">How sizing works</button></div>${ai}</div>`;
+  }
+  function holdingsToolbar() {
+    const sorts = [["value", "Value"], ["decision", "Decision"], ["move", "Money to move"], ["gap", "Off target"]];
+    return `<div class="htools"><div class="chips decf" role="group" aria-label="Filter by decision">${["All", ...DECS].map((d) => `<button data-set="pfDec" data-val="${d}" class="${(st.pfDec || "All") === d ? "on" : ""}">${esc(d)}</button>`).join("")}</div>
+      <label class="hsort"><span class="tk">Sort</span><select data-set="pfSort" aria-label="Sort holdings">${sorts.map(([v, l]) => `<option value="${v}"${(st.pfSort || "value") === v ? " selected" : ""}>${l}</option>`).join("")}</select></label></div>`;
+  }
+  function sortRows(rows, R) {
+    const g = (r) => R.byId.get(r.h.id) || {}, s = st.pfSort || "value";
+    const f = st.pfDec && st.pfDec !== "All" ? rows.filter((r) => g(r).dec === st.pfDec) : rows;
+    const cmp = { value: (a, b) => (b.v ?? -1) - (a.v ?? -1), decision: (a, b) => DEC_ORDER[g(a).dec] - DEC_ORDER[g(b).dec] || (b.v ?? -1) - (a.v ?? -1),
+      move: (a, b) => Math.abs(g(b).money || 0) - Math.abs(g(a).money || 0) || (b.v ?? -1) - (a.v ?? -1), gap: (a, b) => Math.abs(g(b).dw || 0) - Math.abs(g(a).dw || 0) || (b.v ?? -1) - (a.v ?? -1) }[s];
+    return [...f].sort(cmp);
+  }
+  // decision block used in the idea detail ("Your position") and the position sheet for unrated holdings
+  function decisionBlock(g, R) {
+    const ai = REV && REV.holdings && REV.holdings[g.k];
+    const rng = g.dec === "Review" || g.hi == null ? "—" : g.dec === "Sell" ? "0% (exit)" : g.to != null && g.dec !== "Add" ? `${pct1(g.to)}` : `${pct1(g.lo)}–${pct1(g.hi)}`;
+    const ask = g.i ? `<button class="btn sm" data-act="ask" data-k="${esc(keyOf(g.i))}">✦ Ask the analyst</button>` : `<button class="btn sm" data-act="askHolding" data-g="${esc(g.k)}">✦ Ask the analyst</button>`;
+    return `<div class="decb"><div class="decr">${decPill(g.dec, "dlg")}<div class="decc"><b>${esc(g.change || (g.dec === "Review" ? "Needs your review" : ""))}</b><div class="tk">${esc(g.reason)}</div></div></div>
+      <div class="decbar">${targetBar(g, Math.max(10, (g.w || 0), g.cap || 0) * 1.15)}<div class="declg"><span><i class="lgc"></i>Now ${pct1(g.w)}</span>${g.dec !== "Review" ? `<span><i class="lgt b-${g.dec.toLowerCase()}"></i>Target ${esc(rng)}</span>` : ""}${g.cap != null ? `<span class="tk">Cap ${pct1(g.cap)} for ${g.score.toFixed(1)}</span>` : ""}</div></div>
+      <dl class="kv deck">${g.conv ? `<dt>Conviction</dt><dd><span class="conv cv-${g.conv.toLowerCase()}">${esc(g.conv)}</span></dd>` : ""}${g.plp != null ? `<dt>Unrealised</dt><dd class="${g.pl > 0 ? "pos" : g.pl < 0 ? "neg" : ""}">${esc(bmS(g.pl, 0))} (${pct(g.plp)})</dd>` : ""}${g.day != null ? `<dt>Day</dt><dd class="${g.day > 0 ? "pos" : g.day < 0 ? "neg" : ""}">${pct(g.day, 2)}</dd>` : ""}<dt>Rule</dt><dd>${esc(g.rules.join(" · "))}</dd></dl>
+      ${g.notes.length ? `<ul class="decn">${g.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+      ${g.dec === "Review" ? `<div class="tk">${g.unrated ? "The dashboard doesn't cover this holding, so there's no score to size it against. Link it to an idea (✎) if it is one, or ask the analyst." : "Add a manual price or import a value (✎) so it can be sized."}</div>` : ""}
+      ${ai ? aiVerdictCard(g, ai, true) : ""}
+      <div class="srow mt6">${ask}<button class="btn sm aib" data-act="aiReview" data-g="${esc(g.k)}">✦ ${ai ? "Refresh AI review" : "Get AI review"}</button>${g.i ? "" : `<button class="btn sm" data-edit="${esc(g.ids[0])}">✎ Edit</button>`}</div></div>`;
+  }
+  function reviewPosition(i) {
+    if (!P || !VS.ready || !P.holdings.length) return "";
+    const R = reviewCalc(), g = R.groups.find((x) => x.i && keyOf(x.i) === keyOf(i)); return g ? decisionBlock(g, R) : "";
+  }
+  function rulesSheet() {
+    const R = { caps: capTable(), pr: revPrefs() }, p = PROFILES[R.pr.profile];
+    return sheetHead("How sizing works", `Profile: ${esc(R.pr.profile)}${R.pr.customCap ? `, custom top cap ${pct1(R.pr.customCap)}` : ""} · change it in Settings`) + `<div class="shb rules">
+      <h3>Maximum position by score</h3><table class="captab"><thead><tr><th>Overall score</th>${Object.keys(PROFILES).map((k) => `<th class="${k === R.pr.profile ? "on" : ""}">${k}</th>`).join("")}</tr></thead><tbody>
+      ${BANDS.map(([s, c, l]) => `<tr><td>${l}</td>${Object.entries(PROFILES).map(([k, pp]) => `<td class="${k === R.pr.profile ? "on" : ""}">${pct1(k === R.pr.profile && R.pr.customCap ? half(c / 12 * R.pr.customCap) : half(c * pp.mult))}</td>`).join("")}</tr>`).join("")}
+      <tr><td>Below 6</td>${Object.keys(PROFILES).map((k) => `<td class="${k === R.pr.profile ? "on" : ""}">Exit</td>`).join("")}</tr></tbody></table>
+      <h3>Decisions, in order</h3><ol class="rl">
+        <li><b>Review</b>: holdings the dashboard doesn't rate, or with no price or value. Nothing is guessed; ask the analyst instead.</li>
+        <li><b>Sell</b>: anything rated <i>Avoid</i>, or scoring below 6. Target 0%.</li>
+        <li><b>Trim</b> (rated Trim): halve the position, and never leave it above its cap.</li>
+        <li><b>Trim</b> (overweight): above the cap for its score by more than 10% of the cap (at least 0.5 points), trim back to the cap.</li>
+        <li><b>Add</b>: rated Buy or Accumulate on dips, scoring 7+, and below 60% of its cap. Add to 80% of the cap. Not while its theme is above ${p.theme}% of the portfolio.</li>
+        <li><b>Take profits</b>: scoring below 7 with an unrealised gain of ${p.gain}%+ and otherwise a Hold, trim a quarter.</li>
+        <li><b>Hold</b>: everything else, inside the range for its score. Changes under 0.25% of the portfolio are ignored.</li></ol>
+      <h3>Flags</h3><ul class="rl"><li>Theme above ${p.theme}% of priced holdings (blocks adds in that theme).</li><li>One non-${esc(P ? P.base : "GBP")} currency above ${p.ccy}%.</li><li>Upcoming catalysts in the next 3 weeks, day moves of 5%+, and holdings sized on a broker or manual price rather than today's dashboard price.</li></ul>
+      <h3>Conviction</h3><p class="muted small"><b>High</b>: Avoid-rated sells, scores below 5, positions 1.5× their cap, scores of 8+ (with a timing score of 7+ for adds). <b>Medium</b>: the rest. Dropped one level when the size relies on a broker or manual price, or part of the position has no price.</p>
+      <h3>What it uses</h3><p class="muted small">The dashboard's overall score, action and factor scores (as of ${esc(D.asOf)}), your weights, P/L and cost from this device, theme and currency exposure, and the calendar. Weights are of priced holdings only. Money and share amounts use today's value per share. It never estimates a price or fundamental.</p>
+      <div class="note"><b>Rules-based research, not regulated financial advice.</b> Check costs, tax (CGT, ISA/SIPP) and liquidity before trading.</div></div>`;
+  }
+  function weekSheet() {
+    const R = reviewCalc(), b = asOfDate(), e = new Date(b); e.setDate(e.getDate() + 7);
+    const item = (g, n) => { const soon = (g.cats || []).filter((c) => c.d <= e);
+      return `<button class="wk" ${openAttr(g)}><span class="wkn">${n + 1}</span>${decPill(g.dec)}<span class="wkb"><b>${esc(g.name)}</b><span class="wkc">${esc(g.change || "Needs your review")}</span><span class="tk">${esc(g.reason)}</span>${soon.length ? `<span class="wkcat">📅 ${esc(soon[0].label)}: ${esc(soon[0].t)}</span>` : ""}</span>${moneyChip(g)}</button>`; };
+    const sells = R.week.filter((g) => g.money < 0).reduce((a, g) => a - g.money, 0), adds = R.week.filter((g) => g.money > 0).reduce((a, g) => a + g.money, 0);
+    return sheetHead("What to do this week", `${R.week.length} action${R.week.length === 1 ? "" : "s"} · sells and trims first, then adds, then reviews`) + `<div class="shb">
+      ${R.week.length ? `<div class="wkt"><div><div class="tk">Raise</div><b class="neg">${esc(bm(sells, 0))}</b></div><div><div class="tk">Deploy</div><b class="pos">${esc(bm(adds, 0))}</b></div><div><div class="tk">Net</div><b>${esc(bmS(sells - adds, 0))}</b></div></div>
+      <div class="wks">${R.week.map(item).join("")}</div>` : `<div class="card muted">Nothing to do: every holding is inside its range.</div>`}
+      <div class="disc">Rules-based, from the dashboard as of ${esc(D.asOf)} and the holdings on this device. Not financial advice.</div></div>`;
+  }
+  function posSheet() {
+    const R = reviewCalc(), g = R.groups.find((x) => x.k === sheetData.g); if (!g) return sheetHead("Holding") + `<div class="shb muted">This holding is no longer on the device.</div>`;
+    return sheetHead(g.name, `${esc(g.sym)}${g.v != null ? ` · ${esc(bm(g.v))}` : " · no price"} · not on the dashboard`) + `<div class="shb">${decisionBlock(g, R)}</div>`;
+  }
+
+  // ---------- AI deep dive ----------
+  let REV = null; const RV = { busy: false, ctl: null, err: "", got: 0, scope: null };
+  const saveRev = () => vaultSave("review", REV);
+  function reviewPayload(R, scopeK) {
+    const ids = new Map(); let n = 0; for (const g of R.groups) ids.set(g.k, "H" + ++n);
+    const hold = (g) => ({ id: ids.get(g.k), symbol: g.sym || null, name: g.name, onDashboard: !!g.i,
+      ...(g.i ? { dashboardIdea: g.i.name, dashboardAction: g.i.action, dashboardScore: +g.score.toFixed(1), factorScores: Object.fromEntries(FACTORS.map((f) => [f.short, g.i.s[f.key]])), theme: g.i.theme, role: g.i.role } : {}),
+      valueBase: g.v == null ? null : Math.round(g.v), weightPct: r1(g.w), unrealisedPLPct: r1(g.plp), costBase: g.cost == null ? null : Math.round(g.cost), quantity: g.qty, dayMovePct: g.day, priceSource: SRC_LABEL[g.src],
+      engine: { decision: g.dec, targetPct: g.to, rangePct: g.hi != null ? [g.lo, g.hi] : null, capPct: g.cap ?? null, change: g.change || null, conviction: g.conv, reason: g.reason, rules: g.rules, notes: g.notes },
+      upcomingCatalysts: (g.cats || []).map((c) => `${c.label}: ${c.t}`) });
+    const scope = scopeK ? R.groups.filter((g) => g.k === scopeK) : R.groups;
+    const ctx = { asOf: D.asOf, baseCurrency: P.base, riskProfile: R.pr.profile, capsByScore: R.caps.map((b) => ({ minScore: b.min, maxPct: b.cap })), exitBelowScore: 6,
+      themeFlagPct: R.prof.theme, totalPricedValue: Math.round(R.total), exposureByThemePct: Object.fromEntries(pfCalc().byTheme.map((x) => [x.k, r1(x.w)])), exposureByCurrencyPct: Object.fromEntries(pfCalc().byCcy.map((x) => [x.k, r1(x.w)])),
+      holdingsToReview: scope.map(hold), otherHoldings: scopeK ? R.groups.filter((g) => g.k !== scopeK).map((g) => ({ name: g.name, weightPct: r1(g.w), engineDecision: g.dec })) : undefined,
+      ideas: ranked.map((i) => ({ name: i.name, ticker: i.ticker, theme: i.theme, role: i.role, action: i.action, score: +fmt(score10(i)), trigger: i.trigger, nextCatalyst: `${i.catalystDate}: ${i.catalyst}`, risk: i.risk, linkToLeader: i.link || undefined })),
+      themeStances: D.themeStances, catalysts: D.catalysts.map((c) => ({ date: c.date, event: c.event, type: c.type })) };
+    return { ids, ctx, scope };
+  }
+  const REVIEW_SYS = `You are "Analyst" inside Invest Intel, a private investing dashboard for a UK-based, finance-qualified, risk-tolerant investor. This is a holdings review.
+You receive the dashboard's ratings, a rules-based engine's decision for each holding, and the investor's position sizes. Give a structured verdict per holding in "holdingsToReview".
+Rules:
+- Decision must be one of Add, Hold, Trim, Sell, Review. You may disagree with the engine; if you do, say why in reasons.
+- Use only the figures provided. Never invent prices, fundamentals, dates or events. If something matters but isn't provided, say it's missing.
+- For holdings with onDashboard=false: say in dataNote that the dashboard has no data on it, reason only from what is provided (size, P/L, price source), and prefer Review unless sizing alone justifies a call.
+- targetWeightPct is a single % of the portfolio (or null if you can't say). Respect the caps unless you explain why not.
+- alternative: a better or second-order play taken ONLY from the "ideas" list (use its exact name), or null.
+- Be concise: 1-3 short reasons and 1-2 risks per holding.
+Reply with ONLY this JSON, no prose, no code fences:
+{"summary":"2-3 sentences on the portfolio","portfolio":["up to 4 portfolio-level points"],"holdings":[{"id":"H1","decision":"Hold","targetWeightPct":8,"reasons":["..."],"risks":["..."],"changeMyMind":"what would change the call","alternative":{"name":"exact idea name","why":"..."},"dataNote":null}]}`;
+  async function runAiReview(scopeK) {
+    if (!aiReady()) { openSheet("aiReview", { need: true }); return; }
+    const R = reviewCalc(); if (!R.groups.length) return;
+    const { ids, ctx, scope } = reviewPayload(R, scopeK); const back = new Map([...ids].map(([k, v]) => [v, k]));
+    const cfg = curCfg(); RV.busy = true; RV.err = ""; RV.got = 0; RV.scope = scopeK || null; RV.ctl = new AbortController();
+    openSheet("aiReview", { scope: scopeK || null });
+    let txt = "";
+    try {
+      const msgs = [{ role: "user", content: `<review_input>\n${JSON.stringify(ctx)}\n</review_input>\n\nReview ${scopeK ? "this holding" : "every holding in holdingsToReview"} and reply with the JSON only.` }];
+      for await (const t of streamChat(cfg, REVIEW_SYS, msgs, RV.ctl.signal, scopeK ? 3000 : 12000)) { txt += t; RV.got = txt.length; const pg = $("#sheet [data-prog]"); if (pg) pg.textContent = `Receiving… ${(txt.length / 1000).toFixed(1)}k characters`; }
+      const j = parseJsonLoose(txt); if (!j || !Array.isArray(j.holdings)) throw new Error("The reply wasn't in the expected format. Try again or pick another model.");
+      const names = new Set(D.ideas.map((i) => i.name)), now = Date.now();
+      const clean = (h) => { const k = back.get(String(h.id)); if (!k) return null; const g = R.groups.find((x) => x.k === k);
+        const alt = h.alternative && names.has(String(h.alternative.name)) ? { name: String(h.alternative.name), why: String(h.alternative.why || "") } : null;
+        const tw = typeof h.targetWeightPct === "number" && h.targetWeightPct >= 0 && h.targetWeightPct <= 100 ? h.targetWeightPct : null;
+        return [k, { ts: now, decision: DECS.includes(h.decision) ? h.decision : "Review", target: tw, reasons: (h.reasons || []).slice(0, 4).map(String), risks: (h.risks || []).slice(0, 3).map(String),
+          change: h.changeMyMind ? String(h.changeMyMind) : "", alt, altDropped: !!(h.alternative && h.alternative.name && !alt), note: h.dataNote ? String(h.dataNote) : (g && !g.i ? "Not on the dashboard: no dashboard data was available for this holding." : ""), engine: g ? g.dec : null }]; };
+      const got = j.holdings.map(clean).filter(Boolean);
+      if (!got.length) throw new Error("The reply didn't include any of your holdings. Try again.");
+      if (!scopeK) REV = { ts: now, provider: cfg.provider, model: cfg.model, profile: R.pr.profile, summary: String(j.summary || ""), portfolio: (Array.isArray(j.portfolio) ? j.portfolio : []).slice(0, 5).map(String), holdings: {} };
+      else if (!REV) REV = { ts: now, provider: cfg.provider, model: cfg.model, profile: R.pr.profile, summary: null, portfolio: [], holdings: {} };
+      for (const [k, v] of got) REV.holdings[k] = { ...v, provider: cfg.provider, model: cfg.model };
+      await saveRev();
+    } catch (e) { RV.err = e.name === "AbortError" ? "Stopped." : e.status || e instanceof TypeError ? errText(e, cfg) : e.message; }
+    RV.busy = false; RV.ctl = null; txt = "";
+    if (sheetKind === "aiReview") paintSheet(); render();
+  }
+  function aiVerdictCard(g, v, compact) {
+    const agree = v.engine && v.engine === v.decision;
+    return `<div class="aiv${compact ? " compact" : ""}"><div class="aivh"><span class="sgl sm" aria-hidden="true">✦</span>${compact ? "<b>AI view</b>" : `<b>${esc(g ? g.name : "")}</b>`}${decPill(v.decision)}${v.target != null ? `<span class="tk">target ${pct1(v.target)}</span>` : ""}
+      ${v.engine ? `<span class="agr ${agree ? "ok" : "df"}">${agree ? "agrees with rules" : `rules say ${esc(v.engine)}`}</span>` : ""}</div>
+      ${v.note ? `<div class="aivnote">${esc(v.note)}</div>` : ""}
+      ${v.reasons.length ? `<div class="aivs"><div class="kl">Why</div><ul>${v.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul></div>` : ""}
+      ${v.risks.length ? `<div class="aivs"><div class="kl">Risks</div><ul>${v.risks.map((r) => `<li>${esc(r)}</li>`).join("")}</ul></div>` : ""}
+      ${v.change ? `<div class="aivs"><div class="kl">What would change the call</div><p>${esc(v.change)}</p></div>` : ""}
+      ${v.alt ? (() => { const i = D.ideas.find((x) => x.name === v.alt.name); return `<div class="aivs"><div class="kl">Alternative from your ideas</div>${i ? `<button class="aialt" data-open="${esc(keyOf(i))}">${pill(i.action, ACTION_TONE[i.action])}<b>${esc(i.name)}</b><span class="tk">${fmt(score10(i))}</span><span class="chev">›</span></button>` : ""}<p class="tk">${esc(v.alt.why)}</p></div>`; })() : v.altDropped ? `<div class="tk">The suggested alternative isn't on your ideas list, so it was left out.</div>` : ""}
+      <div class="tk">${esc(PROVIDERS[v.provider] ? PROVIDERS[v.provider].label : "")} · ${esc(v.model || "")} · ${esc(new Date(v.ts).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }))} · AI analysis, not financial advice</div></div>`;
+  }
+  function aiReviewSheet() {
+    const d = sheetData || {};
+    if (d.need || !aiReady()) return sheetHead("AI review") + `<div class="shb"><div class="card setupc sm"><div class="sgl" aria-hidden="true">✦</div><h3>Connect your AI analyst</h3>
+      <p class="muted small">The AI review sends the rules engine's output and the dashboard's ratings to the provider you choose, using your own API key. Add a key in Settings to use it. The rules-based review above works without one.</p>
+      <button class="btn primary" data-sheet-act="goAI">Open AI settings</button></div><div class="disc">AI analysis, not financial advice.</div></div>`;
+    const cfg = curCfg(), lbl = PROVIDERS[cfg.provider].label;
+    if (RV.busy) return sheetHead(d.scope ? "AI review: holding" : "AI review", `${esc(lbl)} · ${esc(cfg.model)}`) + `<div class="shb"><div class="reading"><div class="spin" aria-hidden="true"></div><b>Reviewing ${d.scope ? "this holding" : "your holdings"}…</b><span class="tk" data-prog>Sending the rules output and dashboard ratings to ${esc(lbl)}</span></div>
+      <div class="privnote">Sent: holdings names, sizes, weights, P/L and the engine's decisions, plus the dashboard ideas and calendar. Your API key goes only to ${esc(lbl)}.</div>
+      <div class="shf"><button class="btn" data-sheet-act="aiStop">Stop</button></div></div>`;
+    const R = reviewCalc(), list = d.scope ? R.groups.filter((g) => g.k === d.scope) : [...R.groups].sort((a, b) => DEC_ORDER[a.dec] - DEC_ORDER[b.dec]);
+    const have = REV ? list.filter((g) => REV.holdings[g.k]) : [];
+    const head = sheetHead(d.scope ? (list[0] ? list[0].name : "AI review") : "AI review", REV ? `${esc(PROVIDERS[REV.provider] ? PROVIDERS[REV.provider].label : "")} · ${esc(REV.model)} · ${esc(new Date(REV.ts).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }))}` : "");
+    return head + `<div class="shb">${RV.err ? `<p class="err">${esc(RV.err)}</p>` : ""}
+      ${!d.scope && REV && REV.summary ? `<div class="card aisum"><p>${esc(REV.summary)}</p>${REV.portfolio.length ? `<ul>${REV.portfolio.map((p) => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}</div>` : ""}
+      ${have.length ? have.map((g) => aiVerdictCard(g, REV.holdings[g.k], false)).join("") : `<div class="card muted">No AI review yet${d.scope ? " for this holding" : ""}.</div>`}
+      ${!d.scope && REV && have.length < list.length ? `<div class="tk">${list.length - have.length} holding${list.length - have.length === 1 ? "" : "s"} added since this review.</div>` : ""}
+      <div class="disc">AI analysis of the rules output and the dashboard (as of ${esc(D.asOf)}). Not financial advice. Saved encrypted on this device only.</div>
+      <div class="shf"><button class="btn" data-close>Close</button><button class="btn primary" data-sheet-act="aiRun" data-g="${esc(d.scope || "")}">✦ ${have.length ? "Run again" : "Run AI review"}</button></div></div>`;
+  }
+  function reviewSheetClick(b) {
+    const a = b.dataset.sheetAct;
+    if (a === "aiStop") { if (RV.ctl) RV.ctl.abort(); return true; }
+    if (a === "aiRun") { runAiReview(b.dataset.g || null); return true; }
+    return false;
+  }
+  Object.assign(EXTRA_ACTS, {
+    aiReview: (b) => { const k = b.dataset.g || null; if (REV && (k ? REV.holdings[k] : REV.summary != null) && aiReady()) openSheet("aiReview", { scope: k }); else runAiReview(k); },
+    aiOpen: () => openSheet("aiReview", { scope: null }),
+    weekList: () => openSheet("week"),
+    sizingRules: () => openSheet("rules"),
+    posSheet: (b) => openSheet("pos", { g: b.dataset.g }),
+    askHolding: (b) => { const R = reviewCalc(), g = R.groups.find((x) => x.k === b.dataset.g); if (!g) return; AU.focus = null;
+      AU.draft = `Review my holding ${g.name}${g.sym && g.sym !== g.name ? ` (${g.sym})` : ""}${g.w != null ? `, ${pct1(g.w)} of my portfolio` : ", which has no price"}. It isn't on the dashboard: say so, use only what you know and what's in my portfolio data, and tell me whether to add, hold, trim or sell and what size fits.`;
+      goTab("Analyst"); },
+    revProfile: async (b) => { P.review = { ...(P.review || {}), profile: b.dataset.val }; await savePortfolio(); render(); toast(`Risk profile: ${b.dataset.val}`); },
+    revCapClear: async () => { P.review = { ...(P.review || {}), customCap: null }; await savePortfolio(); render(); toast("Using the profile's caps"); },
+    revClearAI: async () => { if (!confirm("Delete the saved AI review from this device?")) return; REV = null; await vdel("review"); render(); toast("AI review deleted"); },
+  });
+  function reviewSettings() {
+    if (!VS.ready || !P) return "";
+    const pr = revPrefs(), caps = capTable();
+    return `<h3 id="review-settings">Holdings review</h3><div class="card"><div class="slbl">Risk profile</div>
+      <div class="seg3 prof" role="radiogroup" aria-label="Risk profile">${Object.entries(PROFILES).map(([k, p]) => `<button type="button" role="radio" aria-checked="${pr.profile === k}" data-act="revProfile" data-val="${k}" class="${pr.profile === k ? "on" : ""}">${k}</button>`).join("")}</div>
+      <div class="tk">${esc(PROFILES[pr.profile].blurb)}. Caps by score: ${caps.map((b) => `${b.label} up to ${pct1(b.cap)}`).join(", ")}; below 6 exits.</div>
+      <form class="capf" data-form="revcap"><label class="fld"><span>Custom top cap (score 8+), optional</span><input name="cap" type="number" inputmode="decimal" min="2" max="40" step="0.5" value="${pr.customCap || ""}" placeholder="${pct1(half(12 * PROFILES[pr.profile].mult))} (profile)"></label>
+        <button class="btn" type="submit">Set</button>${pr.customCap ? `<button class="btn" type="button" data-act="revCapClear">Use profile</button>` : ""}</form>
+      <div class="tk">A custom cap replaces the 8+ cap; the lower bands scale with it.</div>
+      <div class="srow mt12"><button class="btn" data-act="sizingRules">How sizing works</button>${REV ? `<button class="btn dangerT" data-act="revClearAI">Delete saved AI review</button>` : ""}</div></div>`;
+  }
   function extraClick(e) {
     const pv = e.target.closest("[data-ai-prov]");
     if (pv) { const id = pv.dataset.aiProv; if (A.cfg.provider !== id) { A.cfg.provider = id; AU.showCustom = false; saveAI().catch(() => {}); render(); } return true; }
@@ -1646,7 +1985,7 @@ How to answer:
         <div class="srow"><button class="btn" data-act="backup">⇅ Backup and sync</button><span class="tk">${P.holdings.length} holdings on this device${P.updatedAt ? " · saved " + esc(new Date(P.updatedAt).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })) : ""}</span></div>
         <button class="btn danger" data-act="wipeLocal">Delete holdings, chat and AI key from this device</button>
         <div class="tk mt6">Holdings, chat and the AI key are AES-256-GCM encrypted with your passcode in this browser's storage. 🔒 Lock now clears them from memory.</div></div>` : "";
-    return ai + pf;
+    return reviewSettings() + ai + pf;
   }
   // ---------- views ----------
   const V = {
@@ -1799,6 +2138,8 @@ How to answer:
         : head + body() + (st.view === "Settings" ? "" : foot);
     }
     document.querySelectorAll("[data-w]").forEach((el) => { el.style.width = el.dataset.w + "%"; });
+    document.querySelectorAll("#view [data-l]").forEach((el) => { el.style.left = el.dataset.l + "%"; });
+    if (sheetKind === "pos" || sheetKind === "week" || (sheetKind === "aiReview" && !RV.busy)) paintSheet();
     document.querySelectorAll("#tabs [data-tab]").forEach((b) => b.classList.toggle("on", b.dataset.tab === st.view));
     $("#tabs [data-more]").classList.toggle("on", OVERFLOW.includes(st.view));
   }
