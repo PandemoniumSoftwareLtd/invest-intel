@@ -8,7 +8,7 @@ price history, fundamentals and FX are fetched at build time and stored inside t
 
 ## On-device data (never published)
 - **Portfolio**: imported from broker CSVs (Trading 212, Freetrade, Hargreaves Lansdown, AJ Bell, Interactive Brokers, Coinbase, or any CSV
-  via column mapping) or added by hand. **Analyst**: provider, model, API key and chat history.
+  via column mapping) or added by hand. **Analyst**: provider, model, API key, chat history and the last AI review. Review settings (risk profile, cap) live in the portfolio record.
 - Stored in the browser's IndexedDB (`vault` store), each record AES-256-GCM encrypted with the same passcode-derived key. Records carry the
   salt they were sealed with; after a passcode change the app asks for the previous passcode once to re-encrypt them.
 - Encrypted backup export/import (same passcode) moves holdings between iPhone, iPad and Mac. Backups never include the API key or chat.
@@ -20,6 +20,16 @@ price history, fundamentals and FX are fetched at build time and stored inside t
   highlighted and unseen numbers are left blank (never estimated). Nothing is saved until the review is confirmed. Images live only in
   memory and are dropped after reading, on close and on lock; they are never written to IndexedDB, Cache Storage or localStorage.
   `img-src` allows `blob:` only for the HEIC/decoder fallback; thumbnails are canvases. HEIC works where the browser decodes it (Safari).
+- **Holdings review** (Portfolio): a rules engine running on the device (no AI key) gives each holding one decision (Add, Hold, Trim,
+  Sell or Review) with a target weight, the concrete change in money and shares, a one-line reason and a conviction level. It uses the
+  dashboard's score, action and factor scores, the position's weight, P/L and cost, theme and currency exposure, and upcoming catalysts.
+  Caps by score (Balanced 12/8/5% for 8+/7-8/6-7, below 6 exits; Aggressive ×1.25 is the default; Cautious ×⅔; optional custom top cap).
+  Overweight lines are trimmed to the cap, Trim-rated lines are halved, Avoid-rated lines are sold, top scorers below 60% of the cap are
+  added to 80% of it (not while their theme is above 35%), and low scorers with large gains take a quarter off. Unrated or unpriced
+  holdings get Review. The full rules are shown in the app under "How sizing works".
+- **AI review**: optional; sends the engine output, holdings sizes and dashboard ideas to the Analyst provider with the user's key and
+  asks for a structured verdict per holding. Alternatives must come from the ideas list. The last review is cached AES-GCM encrypted
+  (`review` vault record) with a timestamp; it's excluded from backups and deleted with "Delete … from this device".
 - xAI uses the Responses API (`/v1/responses`, `store:false`); Anthropic uses Messages; OpenAI uses Chat Completions.
 
 ## Layout
