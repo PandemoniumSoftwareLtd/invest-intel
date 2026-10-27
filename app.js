@@ -9,9 +9,11 @@
   const enc = new TextEncoder();
 
   // ---------- settings (localStorage; nothing sensitive) ----------
-  const DEFAULTS = { checkEvery: "open", autoRefresh: false, theme: "system", remember: true, startView: "Focus", density: "comfortable" };
+  const DEFAULTS = { checkEvery: "open", autoRefresh: false, theme: "system", remember: true, startView: "Brief", density: "comfortable" };
   const S = Object.assign({}, DEFAULTS, (() => { try { return JSON.parse(localStorage.getItem("settings") || "{}"); } catch { return {}; } })());
   const saveSettings = () => localStorage.setItem("settings", JSON.stringify(S));
+  // v7: Brief became the default start view; move devices still on the old default across once
+  if (!S.bv) { if (!S.startView || S.startView === "Focus") S.startView = "Brief"; S.bv = 1; saveSettings(); }
   function applyLook() {
     const r = document.documentElement;
     if (S.theme === "system") delete r.dataset.theme; else r.dataset.theme = S.theme;
@@ -113,10 +115,10 @@
   const STANCE_TONE = { Overweight: "success", Neutral: "neutral", Underweight: "warning" };
   const DIR_TONE = { Positive: "success", Negative: "danger", Mixed: "neutral", Pending: "neutral" };
   const IMPACT_TONE = { Positive: "success", Negative: "danger", Mixed: "neutral" };
-  const VIEWS = ["Focus", "Scoreboard", "Themes", "Crypto", "Calendar", "Sources", "Portfolio", "Analyst"];
-  // keys 1-9 follow this order; on phones Themes/Crypto/Calendar/Sources/Settings live under "More"
-  const TABS = [["Focus", "◎"], ["Scoreboard", "≡"], ["Themes", "◇"], ["Crypto", "₿"], ["Calendar", "▦"], ["Sources", "↗"], ["Portfolio", "◔"], ["Analyst", "✦"], ["Settings", "⚙"]];
-  const OVERFLOW = ["Themes", "Crypto", "Calendar", "Sources", "Settings"];
+  const VIEWS = ["Brief", "Focus", "Scoreboard", "Themes", "Crypto", "Calendar", "Sources", "Portfolio", "Analyst"];
+  // keys 1-9 then 0 follow this order; on phones Scoreboard/Themes/Crypto/Calendar/Sources/Settings live under "More"
+  const TABS = [["Brief", "☀"], ["Focus", "◎"], ["Scoreboard", "≡"], ["Themes", "◇"], ["Crypto", "₿"], ["Calendar", "▦"], ["Sources", "↗"], ["Portfolio", "◔"], ["Analyst", "✦"], ["Settings", "⚙"]];
+  const OVERFLOW = ["Scoreboard", "Themes", "Crypto", "Calendar", "Sources", "Settings"];
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const RANGES = { "1M": 31, "3M": 92, "6M": 183, "1Y": 366 };
   const CHECK = { open: ["On open only", 0], "15m": ["Every 15 min", 15], "1h": ["Every hour", 60], "4h": ["Every 4 hours", 240] };
@@ -164,12 +166,12 @@
     const saved = sessionStorage.getItem("view");
     st = { view: saved || (VIEWS.includes(S.startView) ? S.startView : "Focus"), group: "All", action: "All", sort: "overall", cols: "Decision",
       theme: "Defence", cal: "All", month: iso(base).slice(0, 7), detail: null, range: "6M", back: null,
-      q: "", fTheme: "All", fAction: "All", fMin: "0", showFilters: false };
+      q: "", fTheme: "All", fAction: "All", fMin: "0", showFilters: false, brief: null, briefQ: "" };
     $("#lock").hidden = true; $("#app").hidden = false;
     $("#tabs").innerHTML = `<div class="navIn"><div class="brand"><img src="icons/icon-192.png" alt="" width="28" height="28"><span>Invest Intel</span></div>`
-      + TABS.map(([v, ic], n) => `${v === "Portfolio" ? `<div class="navsep" aria-hidden="true"><span>You</span></div>` : ""}<button data-tab="${v}" aria-keyshortcuts="${n + 1}"${OVERFLOW.includes(v) ? ' class="ovf"' : ""}><span class="ic">${ic}</span><span class="tl">${v}</span><kbd>${n + 1}</kbd></button>`).join("")
+      + TABS.map(([v, ic], n) => `${v === "Portfolio" ? `<div class="navsep" aria-hidden="true"><span>You</span></div>` : ""}<button data-tab="${v}" aria-keyshortcuts="${(n + 1) % 10}"${OVERFLOW.includes(v) ? ' class="ovf"' : ""}><span class="ic">${ic}</span><span class="tl">${v}</span><kbd>${(n + 1) % 10}</kbd></button>`).join("")
       + `<button data-more class="more" aria-haspopup="dialog"><span class="ic">⋯</span><span class="tl">More</span></button>`
-      + `<div class="kbhelp"><kbd>/</kbd> search · <kbd>j</kbd><kbd>k</kbd> move · <kbd>Esc</kbd> close</div></div>`;
+      + `<div class="kbhelp"><kbd>1</kbd>–<kbd>0</kbd> views · <kbd>/</kbd> search · <kbd>j</kbd><kbd>k</kbd> move · <kbd>[</kbd><kbd>]</kbd> older/newer brief · <kbd>Esc</kbd> close</div></div>`;
     $("#tabs").onclick = (e) => { if (e.target.closest("[data-more]")) { openMore(); return; } const b = e.target.closest("[data-tab]"); if (b) goTab(b.dataset.tab); };
     $("#q").oninput = (e) => { st.q = e.target.value; render(); };
     $("#filtBtn").onclick = () => { st.showFilters = !st.showFilters; renderFilters(); };
@@ -242,7 +244,8 @@
     if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key === "/") { e.preventDefault(); $("#q").focus(); $("#q").select(); return; }
     if (!$("#sheet").hidden) return;
-    if (/^[1-9]$/.test(e.key)) { goTab(TABS[+e.key - 1][0]); return; }
+    if (/^[0-9]$/.test(e.key)) { const t = TABS[(+e.key + 9) % 10]; if (t) goTab(t[0]); return; }
+    if ((e.key === "[" || e.key === "]") && st.view === "Brief" && !st.detail) { const B = briefs(), k = B.indexOf(curBrief()), n = B[k + (e.key === "[" ? 1 : -1)]; if (n) { st.brief = n.date; render(); scrollTo(0, 0); } return; }
     if ((e.key === "j" || e.key === "k" || e.key === "ArrowDown" || e.key === "ArrowUp") && splitOn()) {
       const ks = [...new Set([...document.querySelectorAll(".listpane .idea[data-open], .listpane .hold[data-open]")].map((x) => x.dataset.open))]; if (!ks.length) return;
       e.preventDefault(); const cur = ks.indexOf(st.detail || selKey()); const n = Math.max(0, Math.min(ks.length - 1, cur + (e.key === "j" || e.key === "ArrowDown" ? 1 : -1)));
@@ -498,7 +501,7 @@
   async function keyFrom(pass, salt, iterations) { return deriveKey(pass, { salt, iterations }); }
   const VS = { ready: false, needPass: false, stale: {}, err: "" };
   let P = null, A = null, IMP = null;
-  const AU = { ctxDash: true, ctxPort: true, focus: null, draft: "", busy: false, ctl: null, editKey: false, showCustom: false };
+  const AU = { brief: null, ctxDash: true, ctxPort: true, focus: null, draft: "", busy: false, ctl: null, editKey: false, showCustom: false };
   const newPortfolio = () => ({ v: 1, base: "GBP", holdings: [], updatedAt: null });
   async function vaultSave(name, obj) {
     if (!canEnc()) throw new Error("Vault is locked");
@@ -1414,6 +1417,8 @@ How to answer:
     } else s += `\n\n(The investor has switched off sharing dashboard data for this message.)`;
     if (AU.ctxPort) s += `\n\n<portfolio>\n${JSON.stringify(portCtx())}\n</portfolio>`;
     else s += `\n\n(The investor has not shared their portfolio for this message.)`;
+    const br = AU.brief ? briefs().find((b) => b.date === AU.brief) : null;
+    if (br) s += `\n\nThe investor opened this chat from their morning brief. Treat it as the topic: it was written for them on ${br.date} (as of ${br.asOf || "the morning"}); refer to it, check it against the dashboard data, and don't repeat it back in full.\n<morning_brief date="${br.date}" title="${br.title.replace(/"/g, "'")}">\n${br.md}\n</morning_brief>`;
     if (focus) s += `\n\nThe investor opened this chat from the ${focus.name} (${focus.ticker}) page: treat it as the focus unless they ask about something else. Full fundamentals for it are included above.`;
     s += `\n\nToday is ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}.`;
     return s;
@@ -1490,10 +1495,16 @@ How to answer:
   // ---------- tiny, safe markdown (escape first, then format) ----------
   function inl(s) {
     const codes = []; let t = esc(s).replace(/`([^`]+)`/g, (_, c) => { codes.push(c); return `\u0000${codes.length - 1}\u0000`; });
-    t = t.replace(/\*\*([^*]+?)\*\*/g, "<strong>$1</strong>").replace(/__([^_]+?)__/g, "<strong>$1</strong>")
+    // links first (so URLs never get emphasis): [text](https://…), <https://…>, then bare https:// URLs (trailing punctuation kept outside)
+    const links = []; const keep = (h) => { links.push(h); return `\u0001${links.length - 1}\u0001`; };
+    const A = (href, txt) => `<a href="${href}" target="_blank" rel="noopener noreferrer">${txt}</a>`;
+    t = t.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, x, h) => keep(A(h, `\u0002${x}\u0003`)))
+      .replace(/&lt;(https?:\/\/[^\s&]+(?:&amp;[^\s&]+)*)&gt;/g, (_, h) => keep(A(h, h.replace(/^https?:\/\/(www\.)?/, ""))))
+      .replace(/https?:\/\/[^\s<\u0001\u0002\u0003]+/g, (h) => { const m = /^(.*?)([.,;:!?)\]]*)$/.exec(h); return keep(A(m[1], m[1].replace(/^https?:\/\/(www\.)?/, ""))) + m[2]; });
+    const fmtI = (x) => x.replace(/\*\*([^*]+?)\*\*/g, "<strong>$1</strong>").replace(/__([^_]+?)__/g, "<strong>$1</strong>")
       .replace(/(^|[^*\w])\*(?!\s)([^*]+?)\*(?!\w)/g, "$1<em>$2</em>").replace(/(^|[^_\w])_(?!\s)([^_]+?)_(?!\w)/g, "$1<em>$2</em>")
-      .replace(/~~([^~]+)~~/g, "<del>$1</del>")
-      .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      .replace(/~~([^~]+)~~/g, "<del>$1</del>");
+    t = fmtI(t).replace(/\u0001(\d+)\u0001/g, (_, n) => links[+n].replace(/\u0002([\s\S]*?)\u0003/, (_, x) => fmtI(x)));
     return t.replace(/\u0000(\d+)\u0000/g, (_, n) => `<code>${codes[+n]}</code>`);
   }
   function md(src) {
@@ -1564,6 +1575,7 @@ How to answer:
     const hero = `<div class="hero"><div class="sgl" aria-hidden="true">✦</div><h2>Ask your analyst</h2><p class="muted">Grounded in today's dashboard${nh ? " and your " + nh + " holdings" : ""}. Try one of these:</p>${sugg}</div>`;
     const ctxChips = `<div class="ctxr"><button class="cchip${AU.ctxDash ? " on" : ""}" data-act="ctxDash" aria-pressed="${AU.ctxDash}"><span class="cdot"></span>Dashboard data</button>
       <button class="cchip${AU.ctxPort ? " on" : ""}" data-act="ctxPort" aria-pressed="${AU.ctxPort}"><span class="cdot"></span>Portfolio${nh ? ` (${nh})` : " (empty)"}</button>
+      ${AU.brief ? `<span class="cchip on focus"><span class="cdot"></span>Brief: ${esc(briefLabel(AU.brief).replace(/ \d{4}$/, ""))}<button class="x" data-act="clearBrief" aria-label="Remove brief from context">✕</button></span>` : ""}
       ${focus ? `<span class="cchip on focus"><span class="cdot"></span>Focus: ${esc(focus.ticker)}<button class="x" data-act="clearFocus" aria-label="Remove focus">✕</button></span>` : ""}
       <button class="lnk ctxv" data-act="showCtx">What's sent?</button></div>`;
     const side = `<aside class="chatside"><h3>Context</h3><div class="card small"><dl class="kv">
@@ -1596,6 +1608,7 @@ How to answer:
   }
   const autoGrow = (t) => { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 160) + "px"; };
   function onInput(e) {
+    if (e.target.id === "briefQ") { st.briefQ = e.target.value; const l = $(".brl"); if (l) l.innerHTML = briefList(); return; }
     if (e.target.id === "chatIn") { AU.draft = e.target.value; autoGrow(e.target); const b = $(".sendb:not(.stop)"); if (b) b.disabled = !AU.draft.trim(); }
   }
   function onViewKey(e) {
@@ -1967,6 +1980,133 @@ Reply with ONLY this JSON, no prose, no code fences:
       <div class="tk">A custom cap replaces the 8+ cap; the lower bands scale with it.</div>
       <div class="srow mt12"><button class="btn" data-act="sizingRules">How sizing works</button>${REV ? `<button class="btn dangerT" data-act="revClearAI">Delete saved AI review</button>` : ""}</div></div>`;
   }
+  // =====================================================================================
+  // Brief: the daily morning brief (markdown, decrypted with the rest of the data). Rendered with the
+  // escape-first md() renderer; tickers and names become buttons that open the idea detail.
+  // "Seen" dates live in localStorage (dates only, no brief text).
+  // =====================================================================================
+  const briefs = () => (D && D.briefs) || [];
+  const seenSet = () => { try { return new Set(JSON.parse(localStorage.getItem("briefSeen") || "[]")); } catch { return new Set(); } };
+  const markSeen = (d) => { const s = seenSet(); if (s.has(d)) return; s.add(d); localStorage.setItem("briefSeen", JSON.stringify([...s].sort().slice(-90))); };
+  const NEWNOW = new Set(); // briefs that were unseen when first shown this session (keep their "New" pill)
+  const isNew = (b) => NEWNOW.has(b.date) || !seenSet().has(b.date);
+  const briefLabel = (d) => { const x = new Date(d + "T12:00:00"); return x.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric" }); };
+  const curBrief = () => { const B = briefs(); return B.find((b) => b.date === st.brief) || B[0] || null; };
+  // ---------- entity matching (ideas: names exact-case, tickers exact-case, aliases any case) ----------
+  let ENT = null;
+  function entIndex() {
+    if (ENT && ENT.d === D) return ENT;
+    const exact = new Map(), lower = new Map(), pats = [];
+    const add = (s, k, ci) => { if (!s || s.length < 2) return; if (ci) lower.set(s.toLowerCase(), k); else exact.set(s, k); pats.push(s); };
+    for (const i of D.ideas) {
+      const k = keyOf(i); add(i.name, k, false);
+      for (const a of matchHints(i).aliases || []) if (a.length >= 4) add(a, k, true);
+      for (const t0 of i.ticker.split("/")) { const t = t0.trim().split(/\s+/)[0].replace(/^[A-Z]+:/, ""); if (/^[A-Z][A-Z0-9]{1,5}\.?$/.test(t)) add(t, k, false); }
+    }
+    const esc2 = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    pats.sort((a, b) => b.length - a.length);
+    const re = pats.length ? new RegExp(`(?<![\\w.$£€])(?:${pats.map(esc2).join("|")})(?![\\w])`, "gi") : null;
+    ENT = { d: D, re, look: (m) => exact.get(m) || lower.get(m.toLowerCase()) || null };
+    return ENT;
+  }
+  function mentions(text) {
+    const E = entIndex(), out = new Map(); if (!E.re) return out; let sec = "";
+    for (const line of String(text || "").split("\n")) {
+      const h = /^#{1,6}\s+(.*)$/.exec(line) || /^\*\*([^*]{2,60})\*\*\s*:?\s*$/.exec(line.trim()); if (h) { sec = h[1].replace(/[*_#]/g, "").trim(); continue; }
+      const plain = line.replace(/\]\([^)]*\)/g, "]").replace(/https?:\/\/\S+/g, ""); E.re.lastIndex = 0; let m;
+      while ((m = E.re.exec(plain))) { const k = E.look(m[0]); if (!k) continue; const o = out.get(k) || { n: 0, secs: new Set() }; o.n++; if (sec) o.secs.add(sec); out.set(k, o); }
+    }
+    return out;
+  }
+  function linkEntities(root) {
+    const E = entIndex(); if (!root || !E.re) return;
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: (n) => (n.parentElement.closest("a,button,code,pre") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+    const nodes = []; while (w.nextNode()) nodes.push(w.currentNode);
+    for (const n of nodes) {
+      const t = n.nodeValue; E.re.lastIndex = 0; let m, last = 0, frag = null;
+      while ((m = E.re.exec(t))) { const k = E.look(m[0]); if (!k) continue; frag = frag || document.createDocumentFragment(); frag.append(t.slice(last, m.index));
+        const b = document.createElement("button"); b.type = "button"; b.className = "ent"; b.dataset.open = k; b.textContent = m[0]; b.title = "Open " + k.split("|")[1]; frag.append(b); last = m.index + m[0].length; }
+      if (frag) { frag.append(t.slice(last)); n.replaceWith(frag); }
+    }
+  }
+  // ---------- "Score changes" section → chips ----------
+  function sectionLines(mdText, re) {
+    const L = String(mdText || "").split("\n"); let on = false; const out = [];
+    for (const l of L) {
+      const h = /^#{1,6}\s+(.*)$/.exec(l) || /^\s*\*\*([^*]{2,60})\*\*\s*:?\s*$/.exec(l);
+      if (h) { if (on) break; if (re.test(h[1])) on = true; continue; }
+      if (on && l.trim()) out.push(l);
+    }
+    return out;
+  }
+  function scoreChanges(b) {
+    const E = entIndex(), out = [];
+    for (const l of sectionLines(b.md, /score changes?/i)) {
+      const t = l.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[*_`]/g, "").replace(/^\s*([-*+]|\d+[.)])\s+/, "");
+      const m = /^(.*?)[\s:(,–-]*\b(\d{1,2}(?:\.\d{1,2})?)\s*(?:\/\s*10\s*)?(?:→|->|➝|⟶|to)\s*(\d{1,2}(?:\.\d{1,2})?)\b(.*)$/.exec(t); if (!m) continue;
+      const from = +m[2], to = +m[3]; if (!(from <= 10 && to <= 10)) continue;
+      let key = null; if (E.re) { E.re.lastIndex = 0; let mm; while ((mm = E.re.exec(t))) { key = E.look(mm[0]); if (key) break; } }
+      const i = key ? D.ideas.find((x) => keyOf(x) === key) : null;
+      const name = i ? i.name : m[1].replace(/[\s:(–-]+$/, "").trim(); if (!name) continue;
+      out.push({ name, from, to, d: Math.round((to - from) * 10) / 10, key, why: m[4].replace(/^[\s)/10:;,–-]+/, "").replace(/\)$/, "").trim() });
+    }
+    return out;
+  }
+  // ---------- view ----------
+  function briefHoldings(b) {
+    if (!VS.ready || !P || !P.holdings.length) return "";
+    const R = reviewCalc(), M = mentions(b.md), hits = [];
+    for (const g of R.groups) {
+      let o = g.i ? M.get(keyOf(g.i)) : null;
+      if (!o && !g.i) { const nm = (g.name || "").trim(), sy = (g.sym || "").trim(); const txt = b.md;
+        const hit = (nm.length >= 4 && txt.includes(nm)) || (/^[A-Z][A-Z0-9.]{1,6}$/.test(sy) && new RegExp(`(?<![\\w.])${sy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`).test(txt));
+        if (hit) o = { n: 1, secs: new Set() }; }
+      if (o) hits.push({ g, o });
+    }
+    hits.sort((a, b2) => DEC_ORDER[a.g.dec] - DEC_ORDER[b2.g.dec] || (b2.g.w || 0) - (a.g.w || 0));
+    const rows = hits.map(({ g, o }) => `<button class="bh" ${openAttr(g)}>${decPill(g.dec)}<span class="bhn"><b>${esc(g.name)}</b><span class="tk">${g.w != null ? pct1(g.w) + " of portfolio" : "no price"}${o.secs.size ? " · in " + esc([...o.secs].slice(0, 2).join(", ")) : ""}</span></span>
+      <span class="bhc c-${g.dec.toLowerCase()}">${esc(g.dec === "Hold" ? "Hold" : g.short || (g.dec === "Review" ? "Review" : g.change))}</span><span class="chev">›</span></button>`).join("");
+    return `<section class="card bhold"><div class="bhh"><div class="kl">Your holdings today</div><span class="tk">${hits.length} of ${R.groups.length} mentioned · decisions from your Holdings review</span></div>
+      ${hits.length ? `<div class="bhs">${rows}</div>` : `<div class="muted small">None of your holdings are named in this brief.</div>`}</section>`;
+  }
+  function briefList() {
+    const q = (st.briefQ || "").trim().toLowerCase(), B = briefs(), cur = curBrief();
+    const L = q ? B.filter((b) => (b.title + " " + b.headline + " " + b.md + " " + briefLabel(b.date)).toLowerCase().includes(q)) : B;
+    if (!L.length) return `<div class="muted small pad">No briefs match “${esc(st.briefQ)}”.</div>`;
+    const seen = seenSet();
+    return L.map((b) => { let snip = "";
+      if (q && !(b.title + " " + b.headline).toLowerCase().includes(q)) { const t = b.md.replace(/\]\([^)]*\)/g, "]").replace(/[#*_>`[\]]/g, ""), at = t.toLowerCase().indexOf(q); if (at >= 0) snip = (at > 40 ? "…" : "") + t.slice(Math.max(0, at - 40), at + q.length + 60).replace(/\s+/g, " ").trim() + "…"; }
+      return `<button class="bli${cur && b.date === cur.date ? " on" : ""}" data-act="brOpen" data-d="${esc(b.date)}" aria-current="${cur && b.date === cur.date}"><span class="blid">${esc(briefLabel(b.date))}${!seen.has(b.date) ? `<i class="ndot" aria-label="New"></i>` : ""}</span><b>${esc(b.headline)}</b>${snip ? `<span class="tk blsn">${esc(snip)}</span>` : ""}</button>`; }).join("");
+  }
+  function briefView() {
+    const B = briefs();
+    if (!B.length) return `<div class="brempty card"><div class="gic big">☀</div><h2>Your morning brief</h2><p class="muted">The 7am brief appears here after the next morning run, with links to every source and to the ideas it mentions. Past briefs stay searchable on this device.</p></div>`;
+    const b = curBrief(), k = B.indexOf(b), older = B[k + 1], newer = B[k - 1];
+    if (!NEWNOW.has(b.date) && !seenSet().has(b.date)) NEWNOW.add(b.date);
+    const chips = scoreChanges(b);
+    const chipHtml = chips.length ? `<section class="bsc"><div class="kl">Score changes</div><div class="bchips">${chips.map((c) => `<${c.key ? `button data-open="${esc(c.key)}"` : "span"} class="schip ${c.d > 0 ? "up" : c.d < 0 ? "down" : ""}"${c.why ? ` title="${esc(c.why)}"` : ""}><b>${esc(c.name)}</b><span class="sv"><s>${c.from.toFixed(1)}</s><i aria-hidden="true">→</i><b>${c.to.toFixed(1)}</b></span><span class="sd">${c.d > 0 ? "▲" : c.d < 0 ? "▼" : "•"} ${Math.abs(c.d).toFixed(1)}</span></${c.key ? "button" : "span"}>`).join("")}</div></section>` : "";
+    const head = `<header class="card bhead"><div class="bmeta"><span class="bdate">${esc(briefLabel(b.date))}</span>${isNew(b) ? `<span class="newp"><i class="ndot"></i>New</span>` : ""}${b.asOf ? `<span class="tk">As of ${esc(b.asOf)}</span>` : ""}</div>
+      <div class="btitle">${esc(b.title)}</div><h1 class="bhl">${esc(b.headline)}</h1>
+      <div class="bacts"><button class="btn primary" data-act="brDiscuss" data-d="${esc(b.date)}"><span aria-hidden="true">✦</span> Discuss with analyst</button>
+        <span class="bnav"><button class="iconBtn" data-act="brOpen" data-d="${older ? esc(older.date) : ""}"${older ? "" : " disabled"} aria-label="Older brief" title="Older ( [ )">‹</button><button class="iconBtn" data-act="brOpen" data-d="${newer ? esc(newer.date) : ""}"${newer ? "" : " disabled"} aria-label="Newer brief" title="Newer ( ] )">›</button></span></div>${chipHtml}</header>`;
+    const main = `<article class="brmain">${head}${briefHoldings(b)}<div class="card brbody"><div class="md brmd">${md(b.md)}</div></div>
+      <div class="note mt12"><b>Research, not regulated financial advice.</b> Names in blue open the idea; links open the source in a new tab.</div></article>`;
+    const list = `<aside class="brlist"><div class="brlh"><h3>Past briefs <span class="tk">(${B.length})</span></h3></div><input id="briefQ" type="search" placeholder="Search briefs" aria-label="Search past briefs" value="${esc(st.briefQ || "")}" autocomplete="off"><div class="card brl" role="list">${briefList()}</div></aside>`;
+    return `<div class="brgrid">${main}${list}</div>`;
+  }
+  function afterBrief() {
+    linkEntities($(".brmd"));
+    const b = curBrief(); if (b && document.visibilityState === "visible") markSeen(b.date);
+    navDot();
+  }
+  function navDot() { const t = $("#tabs [data-tab=Brief]"); if (t) t.classList.toggle("hasnew", briefs().some((b) => !seenSet().has(b.date))); }
+  Object.assign(EXTRA_ACTS, {
+    brOpen: (b) => { if (!b.dataset.d) return; st.brief = b.dataset.d; st.detail = null; render(); const m = $(".brmain"); if (m) m.scrollIntoView({ block: "start" }); scrollTo(0, 0); },
+    brDiscuss: (b) => { const br = briefs().find((x) => x.date === b.dataset.d) || curBrief(); if (!br) return; AU.brief = br.date; AU.focus = null;
+      AU.draft = `Talk me through the ${briefLabel(br.date)} brief: what matters most for my holdings and the ideas, and what, if anything, should I do today?`; goTab("Analyst"); },
+    clearBrief: () => { AU.brief = null; render(); },
+    brGo: (b) => { st.brief = b.dataset.d; goTab("Brief"); },
+  });
   function extraClick(e) {
     const pv = e.target.closest("[data-ai-prov]");
     if (pv) { const id = pv.dataset.aiProv; if (A.cfg.provider !== id) { A.cfg.provider = id; AU.showCustom = false; saveAI().catch(() => {}); render(); } return true; }
@@ -2087,6 +2227,7 @@ Reply with ONLY this JSON, no prose, no code fences:
   };
 
   V.Portfolio = portfolioMain;
+  V.Brief = briefView;
   V.Analyst = analystView;
   const baseSettingsView = V.Settings;
   V.Settings = () => { const h = baseSettingsView(); const i = h.indexOf("<h3>Security</h3>"); return i < 0 ? h + extraSettings() : h.slice(0, i) + extraSettings() + h.slice(i); };
@@ -2098,8 +2239,10 @@ Reply with ONLY this JSON, no prose, no code fences:
     const chg = D.changes.filter((c) => has(c.what, c.soWhat));
     const news = THEMES.flatMap((th) => D.news[th] || []).filter((n) => has(n.title, n.site));
     const regs = D.cryptoRegs.filter((r) => has(r.measure, r.impact, r.next, r.j));
-    const none = !ideas.length && !cats.length && !chg.length && !news.length && !regs.length;
+    const brs = briefs().filter((b) => has(b.title, b.headline, b.md));
+    const none = !brs.length && !ideas.length && !cats.length && !chg.length && !news.length && !regs.length;
     return `<h2>Search: “${esc(q)}”</h2>${none ? `<div class="card muted">Nothing matches. Esc clears the search.</div>` : ""}
+      ${brs.length ? `<h3>Briefs (${brs.length})</h3><div class="card list">${brs.slice(0, 8).map((b) => `<button class="item" data-act="brGo" data-d="${esc(b.date)}"><div class="lead">${esc(briefLabel(b.date))}</div><div class="body"><div class="ttl">${esc(b.headline)}</div></div><span class="chev">›</span></button>`).join("")}</div>` : ""}
       ${ideas.length ? `<h3>Ideas (${ideas.length})</h3><div class="cards">${ideas.map((i) => ideaCard(i)).join("")}</div>` : ""}
       ${cats.length ? `<h3>Calendar (${cats.length})</h3>${list(cats.map((c) => ({ lead: c.label, title: c.event, detail: `${c.type} · ${c.why}` })))}` : ""}
       ${chg.length ? `<h3>What changed (${chg.length})</h3>${list(chg.map((c) => ({ lead: c.date, title: c.what, detail: c.soWhat })))}` : ""}
@@ -2116,10 +2259,10 @@ Reply with ONLY this JSON, no prose, no code fences:
     if (st.view === "Analyst" && !q) {
       $("#view").innerHTML = V.Analyst(); document.body.classList.remove("split-mode");
       document.querySelectorAll("#tabs [data-tab]").forEach((b) => b.classList.toggle("on", b.dataset.tab === st.view));
-      $("#tabs [data-more]").classList.toggle("on", OVERFLOW.includes(st.view)); afterChatRender(); return;
+      $("#tabs [data-more]").classList.toggle("on", OVERFLOW.includes(st.view)); navDot(); afterChatRender(); return;
     }
-    const head = (st.view === "Settings" || st.view === "Portfolio") && !q ? "" : `<div class="note"><b>Research, not regulated financial advice.</b> As of ${esc(D.asOf)}. Overall score (1–10) = ${esc(wl)}. Risk: higher = lower risk.</div>`;
-    const foot = `<div class="foot">${isWide() ? "Select an idea to see its chart and fundamentals alongside · 1–9 switch views · / search · Esc close" : "Tap any idea for price chart, fundamentals and scores · 🔒 locks this device"}</div>`;
+    const head = (st.view === "Settings" || st.view === "Portfolio" || st.view === "Brief") && !q ? "" : `<div class="note"><b>Research, not regulated financial advice.</b> As of ${esc(D.asOf)}. Overall score (1–10) = ${esc(wl)}. Risk: higher = lower risk.</div>`;
+    const foot = `<div class="foot">${isWide() ? "Select an idea to see its chart and fundamentals alongside · 1–9, 0 switch views · / search · Esc close" : "Tap any idea for price chart, fundamentals and scores · 🔒 locks this device"}</div>`;
     const body = () => (q ? searchView(q) : V[st.view]());
     document.body.classList.toggle("split-mode", splitOn());
     const prevPane = $(".detailpane"), prevTop = prevPane ? prevPane.scrollTop : 0, prevKey = prevPane ? prevPane.dataset.k : null;
@@ -2135,10 +2278,11 @@ Reply with ONLY this JSON, no prose, no code fences:
       const pane = $(".detailpane"); pane.dataset.k = det ? keyOf(det) : ""; if (det && prevKey === keyOf(det)) pane.scrollTop = prevTop;
     } else {
       $("#view").innerHTML = det ? detail(det) + `<div class="note mt12"><b>Research, not regulated financial advice.</b> As of ${esc(D.asOf)}.</div>`
-        : head + body() + (st.view === "Settings" ? "" : foot);
+        : head + body() + (st.view === "Settings" || st.view === "Brief" ? "" : foot);
     }
     document.querySelectorAll("[data-w]").forEach((el) => { el.style.width = el.dataset.w + "%"; });
     document.querySelectorAll("#view [data-l]").forEach((el) => { el.style.left = el.dataset.l + "%"; });
+    if (st.view === "Brief" && !q && !det) afterBrief(); else navDot();
     if (sheetKind === "pos" || sheetKind === "week" || (sheetKind === "aiReview" && !RV.busy)) paintSheet();
     document.querySelectorAll("#tabs [data-tab]").forEach((b) => b.classList.toggle("on", b.dataset.tab === st.view));
     $("#tabs [data-more]").classList.toggle("on", OVERFLOW.includes(st.view));
