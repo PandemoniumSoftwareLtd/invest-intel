@@ -7,3 +7,10 @@ market-symbols.json
 market.json
 node_modules/
 screenshots/
+test-local/
+parts/
+# Daily briefs (plaintext) — never commit
+briefs/
+# Theme catalogue and supply-chain overlays (plaintext) — never commit
+themes.json
+supply-chain.json

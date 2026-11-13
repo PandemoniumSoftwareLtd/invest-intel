@@ -14,6 +14,11 @@ if (!pass) { console.error("DASHBOARD_PASSCODE is not set; refusing to build.");
 
 const base0 = JSON.parse(fs.readFileSync(dataPath, "utf8"));
 if (fs.existsSync("market.json")) base0.market = JSON.parse(fs.readFileSync("market.json", "utf8"));
+// Overlays maintained by the daily routine alongside data.json (which is regenerated from the canvas each day):
+// themes.json = the sector → theme catalogue with theses, sources and researched picks; supply-chain.json = sourced
+// per-company supply-chain detail. Both are plaintext, gitignored and only ever published inside data.enc.json.
+if (fs.existsSync("themes.json")) base0.themeCatalog = JSON.parse(fs.readFileSync("themes.json", "utf8"));
+if (fs.existsSync("supply-chain.json")) base0.chain = JSON.parse(fs.readFileSync("supply-chain.json", "utf8"));
 else console.warn("market.json not found: building without price history/fundamentals");
 base0.publish = fs.existsSync("publish.json") ? JSON.parse(fs.readFileSync("publish.json", "utf8")) : { schedule: "Weekdays ~7:00 UK" };
 // matching hints for the on-device portfolio (extra listing symbols, name aliases); kept inside the encrypted payload
@@ -88,6 +93,9 @@ for (const br of d.briefs || []) {
 }
 for (const a of Object.values(d.market?.assets || {})) { if (a.liveUrl) probes.add(a.liveUrl); if (a.stats?.url) probes.add(a.stats.url); }
 const GENERIC = new Set(["Coinbase"]);
+// company names from the overlays must not appear in the shell either (short or generic words are skipped)
+for (const n of Object.keys(base0.chain?.companies || {})) if (n.length > 5) probes.add(n);
+for (const s of base0.themeCatalog?.sectors || []) for (const t of s.themes || []) { if (t.thesis && t.thesis.length >= 30) probes.add(t.thesis.slice(0, 30)); for (const p of t.picks || []) if (p.name && p.name.length > 5) probes.add(p.name); }
 for (const n of Object.values(base0.match || {})) for (const a of n.aliases) if (a.length > 4) probes.add(a);
 for (const n of Object.values(base0.match || {})) for (const y of n.syms) if (y.length > 3) probes.add(y);
 const ALLOWED = new Set(["index.html", "app.js", "styles.css", "sw.js", "manifest.json", "robots.txt", "data.enc.json", ".nojekyll"]);
