@@ -1424,41 +1424,120 @@ How to answer:
     s += `\n\nToday is ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}.`;
     return s;
   }
-  async function* streamChat(cfg, sys, msgs, signal, maxTokens) {
-    const pv = PROVIDERS[cfg.provider]; const key = cleanKey(cfg.key);
-    if (!key || !/^[\x21-\x7E]+$/.test(key)) throw new Error("Your API key contains characters that can't be sent. Paste it again in Settings → AI analyst.");
-    let headers, body;
-    if (cfg.provider === "anthropic") {
-      headers = { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
-      body = { model: cfg.model, max_tokens: maxTokens || 4096, system: sys, messages: msgs, stream: true };
-    } else if (cfg.provider === "xai") {
-      // xAI's current Grok models are served on the Responses API
-      headers = { "content-type": "application/json", authorization: "Bearer " + key };
-      body = { model: cfg.model, stream: true, store: false, input: [{ role: "system", content: sys }, ...msgs] };
-      if (maxTokens) body.max_output_tokens = maxTokens;
-    } else {
-      headers = { "content-type": "application/json", authorization: "Bearer " + key };
-      body = { model: cfg.model, stream: true, messages: [{ role: "system", content: sys }, ...msgs] };
-      if (maxTokens) body.max_completion_tokens = maxTokens;
-    }
-    const r = await fetch(pv.url, { method: "POST", headers, body: JSON.stringify(body), signal, credentials: "omit", referrerPolicy: "no-referrer", cache: "no-store" });
-    if (!r.ok) { let m = ""; try { const j = await r.json(); m = (j.error && (j.error.message || (typeof j.error === "string" ? j.error : ""))) || j.message || ""; } catch {} const e = new Error(m || "HTTP " + r.status); e.status = r.status; throw e; }
-    if (!r.body || !r.body.getReader) { const t = await r.text(); yield* parseSSE(cfg, t); return; }
-    const rd = r.body.getReader(), dec = new TextDecoder(); let buf = "";
-    for (;;) {
-      const { value, done } = await rd.read(); if (done) break; buf += dec.decode(value, { stream: true });
-      let n; while ((n = buf.indexOf("\n")) >= 0) { const line = buf.slice(0, n); buf = buf.slice(n + 1); const t = sseText(cfg, line); if (t) yield t; }
-    }
-    if (buf) { const t = sseText(cfg, buf); if (t) yield t; }
+  function chatHeaders(cfg, key) {
+    if (cfg.provider === "anthropic") return { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
+    return { "content-type": "application/json", authorization: "Bearer " + key };
   }
-  function* parseSSE(cfg, text) { for (const line of text.split("\n")) { const t = sseText(cfg, line); if (t) yield t; } }
-  function sseText(cfg, line) {
-    line = line.trim(); if (!line.startsWith("data:")) return ""; const d = line.slice(5).trim(); if (!d || d === "[DONE]") return "";
+  function chatBody(cfg, sys, msgs, maxTokens, stream) {
+    const body = { model: cfg.model, stream: !!stream };
+    if (cfg.provider === "anthropic") { body.max_tokens = maxTokens || 8192; body.system = sys; body.messages = msgs; }
+    else if (cfg.provider === "xai") { body.store = false; body.input = [{ role: "system", content: sys }, ...msgs]; if (maxTokens) body.max_output_tokens = maxTokens; }
+    else { body.messages = [{ role: "system", content: sys }, ...msgs]; if (maxTokens) body.max_completion_tokens = maxTokens; }
+    return body;
+  }
+  function takeLine(buf) {
+    const n = buf.search(/\r\n|\n|\r/); if (n < 0) return null;
+    return { line: buf.slice(0, n), rest: buf.slice(n + (buf.startsWith("\r\n", n) ? 2 : 1)) };
+  }
+  const capRaw = (s, n) => (s.length <= n ? s : s.slice(0, n));
+  function noteStop(diag, j) {
+    if (!diag) return;
+    if (j.type === "message_delta" && j.delta && j.delta.stop_reason) diag.stopReason = j.delta.stop_reason;
+    else if (j.stop_reason) diag.stopReason = j.stop_reason;
+    else if (j.choices && j.choices[0] && j.choices[0].finish_reason) diag.stopReason = j.choices[0].finish_reason;
+    else if (j.response && (j.type === "response.completed" || j.type === "response.incomplete")) {
+      const r = j.response; diag.stopReason = (r.incomplete_details && r.incomplete_details.reason) || r.status || diag.stopReason;
+    } else if (j.status && !j.type) diag.stopReason = j.status;
+  }
+  function sseText(cfg, line, diag) {
+    line = String(line || "").replace(/^\uFEFF/, "").trim(); if (!line.startsWith("data:")) return "";
+    const d = line.slice(5).trim(); if (!d || d === "[DONE]") return "";
     let j; try { j = JSON.parse(d); } catch { return ""; }
-    if (j.type === "error" || (j.error && !j.choices)) throw new Error((j.error && j.error.message) || "The provider returned an error");
-    if (cfg.provider === "anthropic") return j.type === "content_block_delta" && j.delta && j.delta.type === "text_delta" ? j.delta.text : "";
+    if (diag) { diag.events = (diag.events || 0) + 1; noteStop(diag, j); }
+    if (j.type === "error" || (j.error && !j.choices && !j.content && j.output_text == null && !j.output)) throw new Error((j.error && j.error.message) || "The provider returned an error");
+    if (cfg.provider === "anthropic") return j.type === "content_block_delta" && j.delta && j.delta.type === "text_delta" ? (j.delta.text || "") : "";
     if (cfg.provider === "xai") { if (j.type === "response.failed" || j.type === "response.error") throw new Error((j.response && j.response.error && j.response.error.message) || "The provider returned an error"); return j.type === "response.output_text.delta" && typeof j.delta === "string" ? j.delta : ""; }
     return (j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content) || "";
+  }
+  function* parseSSE(cfg, text, diag) {
+    let rest = String(text || "");
+    for (;;) {
+      const got = takeLine(rest);
+      if (!got) { if (rest) { const t = sseText(cfg, rest, diag); if (t) yield t; } break; }
+      rest = got.rest; const t = sseText(cfg, got.line, diag); if (t) yield t;
+    }
+  }
+  function plainText(cfg, j) {
+    if (!j || typeof j !== "object") return "";
+    if (cfg.provider === "anthropic") return (j.content || []).filter((c) => c && c.type === "text" && c.text).map((c) => c.text).join("");
+    if (cfg.provider === "xai") {
+      if (typeof j.output_text === "string" && j.output_text) return j.output_text;
+      const out = [];
+      for (const o of j.output || []) for (const c of (o && o.content) || []) if (c && typeof c.text === "string") out.push(c.text);
+      return out.join("");
+    }
+    return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
+  }
+  function scrubDiag(s) {
+    return String(s || "")
+      .replace(/\b(?:sk|xai)[-_][A-Za-z0-9_-]{8,}\b|\bBearer\s+\S+/gi, "[redacted]")
+      .replace(/("?(?:x-api-key|api[_-]?key|authorization)"?\s*[:=]\s*)"?[^"\s,]+/gi, "$1[redacted]");
+  }
+  function emptyReplyMsg(streamDiag, retryDiag) {
+    const a = streamDiag || {}, b = retryDiag || {};
+    const status = b.status || a.status || "?";
+    const stop = b.stopReason || a.stopReason || "none";
+    const ev = a.events || 0;
+    const raw = scrubDiag(b.raw || a.raw || "").slice(0, 200).replace(/`/g, "'");
+    return `_No text came back (HTTP ${status}, stop_reason: ${stop}, stream events: ${ev}). First bytes: ${raw ? "`" + raw + "`" : "(empty)"}_`;
+  }
+  async function postChat(cfg, sys, msgs, signal, maxTokens, stream, diag) {
+    const pv = PROVIDERS[cfg.provider]; const key = cleanKey(cfg.key);
+    if (!key || !/^[\x21-\x7E]+$/.test(key)) throw new Error("Your API key contains characters that can't be sent. Paste it again in Settings → AI analyst.");
+    const r = await fetch(pv.url, { method: "POST", headers: chatHeaders(cfg, key), body: JSON.stringify(chatBody(cfg, sys, msgs, maxTokens, stream)), signal, credentials: "omit", referrerPolicy: "no-referrer", cache: "no-store" });
+    if (diag) diag.status = r.status;
+    if (!r.ok) {
+      const t = await r.text(); if (diag) diag.raw = capRaw(t, 20000);
+      let m = ""; try { const j = JSON.parse(t); m = (j.error && (j.error.message || (typeof j.error === "string" ? j.error : ""))) || j.message || ""; } catch {}
+      const e = new Error(m || "HTTP " + r.status); e.status = r.status; throw e;
+    }
+    return r;
+  }
+  async function* streamChat(cfg, sys, msgs, signal, maxTokens, diag) {
+    diag = diag || {}; diag.raw = diag.raw || ""; diag.events = diag.events || 0; diag.stopReason = diag.stopReason || "";
+    const r = await postChat(cfg, sys, msgs, signal, maxTokens, true, diag);
+    let buf = "";
+    const push = (t) => { if (!t) return; buf += t; diag.raw = capRaw(diag.raw + t, 20000); };
+    const drain = function* () {
+      for (;;) { const got = takeLine(buf); if (!got) break; buf = got.rest; const t = sseText(cfg, got.line, diag); if (t) yield t; }
+    };
+    if (!r.body || !r.body.getReader) {
+      const t = await r.text(); push(t); yield* parseSSE(cfg, t, diag);
+    } else {
+      const rd = r.body.getReader(), dec = new TextDecoder();
+      for (;;) {
+        const { value, done } = await rd.read();
+        if (value && value.byteLength) push(dec.decode(value, { stream: true }));
+        yield* drain();
+        if (done) { push(dec.decode()); yield* drain(); if (buf) { const t = sseText(cfg, buf, diag); if (t) yield t; } break; }
+      }
+    }
+    if (!diag.events && diag.raw) {
+      let j; try { j = JSON.parse(diag.raw); } catch {}
+      if (j) { noteStop(diag, j); const t = plainText(cfg, j); if (t) yield t; }
+    }
+  }
+  async function completeChat(cfg, sys, msgs, signal, maxTokens, diag) {
+    diag = diag || {};
+    const r = await postChat(cfg, sys, msgs, signal, maxTokens, false, diag);
+    const t = await r.text(); diag.raw = capRaw(t, 20000);
+    let j = null; try { j = JSON.parse(t); } catch {}
+    if (j) {
+      if (j.type === "error" || (j.error && !j.content && !j.choices && j.output_text == null && !j.output)) throw new Error((j.error && j.error.message) || "The provider returned an error");
+      noteStop(diag, j);
+      return plainText(cfg, j);
+    }
+    return "";
   }
   function errText(e, cfg) {
     const L = PROVIDERS[cfg.provider].label;
@@ -1488,8 +1567,12 @@ How to answer:
     while (hist.length && hist[0].role !== "user") hist.shift();
     const sys = systemPrompt(); A.msgs.push(reply); AU.draft = ""; AU.busy = true; AU.ctl = new AbortController(); render(); scrollChat(true);
     try {
-      for await (const t of streamChat(cfg, sys, hist.slice(-24), AU.ctl.signal)) { reply.content += t; paintLast(reply); }
-      if (!reply.content) reply.content = "_No text came back. Try again or pick another model._";
+      const diag = { raw: "", events: 0, stopReason: "", status: 0 };
+      for await (const t of streamChat(cfg, sys, hist.slice(-24), AU.ctl.signal, undefined, diag)) { reply.content += t; paintLast(reply); }
+      if (!reply.content) {
+        const retryDiag = { raw: "", events: 0, stopReason: "", status: 0 };
+        reply.content = await completeChat(cfg, sys, hist.slice(-24), AU.ctl.signal, undefined, retryDiag) || emptyReplyMsg(diag, retryDiag);
+      }
     } catch (e) { if (e.name === "AbortError") reply.stopped = true; else reply.error = errText(e, cfg); }
     AU.busy = false; AU.ctl = null;
     try { if (A) await saveChat(); } catch {}
