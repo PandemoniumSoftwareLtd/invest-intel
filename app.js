@@ -1365,7 +1365,8 @@ Rules:
     ];
   }
   // one key and model per provider, so switching provider keeps each saved key
-  const curCfg = () => { const c = A.cfg, pv = PROVIDERS[c.provider] ? c.provider : "anthropic"; return { provider: pv, model: (c.models && c.models[pv]) || PROVIDERS[pv].models[0][0], key: (c.keys && c.keys[pv]) || "" }; };
+  const cleanKey = (k) => String(k || "").replace(/[^\x21-\x7E]/g, "");
+  const curCfg = () => { const c = A.cfg, pv = PROVIDERS[c.provider] ? c.provider : "anthropic"; return { provider: pv, model: (c.models && c.models[pv]) || PROVIDERS[pv].models[0][0], key: cleanKey((c.keys && c.keys[pv]) || "") }; };
   const aiReady = () => !!(A && A.cfg && curCfg().key);
   const r1 = (v) => (v == null ? null : Math.round(v * 10) / 10);
   function chgOver(m, days) {
@@ -1424,17 +1425,19 @@ How to answer:
     return s;
   }
   async function* streamChat(cfg, sys, msgs, signal, maxTokens) {
-    const pv = PROVIDERS[cfg.provider]; let headers, body;
+    const pv = PROVIDERS[cfg.provider]; const key = cleanKey(cfg.key);
+    if (!key || !/^[\x21-\x7E]+$/.test(key)) throw new Error("Your API key contains characters that can't be sent. Paste it again in Settings → AI analyst.");
+    let headers, body;
     if (cfg.provider === "anthropic") {
-      headers = { "content-type": "application/json", "x-api-key": cfg.key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
+      headers = { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" };
       body = { model: cfg.model, max_tokens: maxTokens || 4096, system: sys, messages: msgs, stream: true };
     } else if (cfg.provider === "xai") {
       // xAI's current Grok models are served on the Responses API
-      headers = { "content-type": "application/json", authorization: "Bearer " + cfg.key };
+      headers = { "content-type": "application/json", authorization: "Bearer " + key };
       body = { model: cfg.model, stream: true, store: false, input: [{ role: "system", content: sys }, ...msgs] };
       if (maxTokens) body.max_output_tokens = maxTokens;
     } else {
-      headers = { "content-type": "application/json", authorization: "Bearer " + cfg.key };
+      headers = { "content-type": "application/json", authorization: "Bearer " + key };
       body = { model: cfg.model, stream: true, messages: [{ role: "system", content: sys }, ...msgs] };
       if (maxTokens) body.max_completion_tokens = maxTokens;
     }
@@ -1463,7 +1466,7 @@ How to answer:
     if (e.status === 429) return `${L} says you're rate-limited or out of credit. Wait a moment or check billing.`;
     if (e.status === 404 || (e.status === 400 && /model/i.test(e.message))) return `${L} doesn't recognise the model “${cfg.model}”. Pick another in Settings → AI analyst. (${e.message})`;
     if (e.status) return `${L} returned an error (${e.status}): ${e.message}`;
-    if (e instanceof TypeError) return `Couldn't reach ${L}. Check your connection. If it keeps failing, ${L} may not allow direct requests from a browser; try another provider.`;
+    if (e instanceof TypeError) return navigator.onLine === false ? "You're offline." : `Couldn't reach ${L}. This is usually a weak connection or a key pasted with hidden characters. Re-paste the key in Settings → AI analyst and try again.`;
     return e.message || "Something went wrong.";
   }
   let paintQ = false;
@@ -1631,8 +1634,9 @@ How to answer:
         P.review = { ...(P.review || {}), customCap: half(v) }; await savePortfolio(); render(); toast(`Top cap set to ${pct1(half(v))}`); return;
       }
       if (k === "ai") {
-        const pvId = curCfg().provider, model = f.model.value === "__custom" ? f.custom.value.trim() : f.model.value, key = f.key.value.trim();
+        const pvId = curCfg().provider, model = f.model.value === "__custom" ? f.custom.value.trim() : f.model.value, key = cleanKey(f.key.value);
         if (!model) throw new Error("Enter a model ID.");
+        if (f.key.value && (!key || !/^[\x21-\x7E]+$/.test(key))) throw new Error("Your API key contains characters that can't be sent. Paste it again in Settings → AI analyst.");
         if (!key && !curCfg().key) throw new Error("Paste an API key.");
         if (key && (key.length < 12 || /\s/.test(key))) throw new Error("That doesn't look like an API key.");
         A.cfg.models = { ...(A.cfg.models || {}), [pvId]: model }; if (key) A.cfg.keys = { ...(A.cfg.keys || {}), [pvId]: key };
