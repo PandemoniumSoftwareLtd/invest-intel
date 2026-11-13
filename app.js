@@ -271,10 +271,10 @@
     $("#filters").onclick = (e) => { const b = e.target.closest("[data-f]"); if (!b) return; if (b.dataset.f === "clear") { st.fTheme = "All"; st.fAction = "All"; st.fMin = "0"; } else st[b.dataset.f] = b.dataset.val; renderFilters(); render(); };
     $("#filters").onchange = (e) => { const t = e.target.closest("select[data-f]"); if (t) { st[t.dataset.f] = t.value; renderFilters(); render(); } };
     let rt; window.onresize = () => { clearTimeout(rt); rt = setTimeout(() => { if (st.view === "Analyst" && document.activeElement && document.activeElement.id === "chatIn") sizeChat(); else render(); }, 150); };
-    if (window.visualViewport) { visualViewport.addEventListener("resize", sizeChat); visualViewport.addEventListener("scroll", sizeChat); }
+    if (window.visualViewport) { visualViewport.addEventListener("resize", onVV); visualViewport.addEventListener("scroll", onVV); }
     $("#view").addEventListener("input", onInput); $("#view").addEventListener("toggle", (e) => { const d = e.target; if (d && d.dataset && d.dataset.sec) { if (d.open) st.secOpen.add(d.dataset.sec); else st.secOpen.delete(d.dataset.sec); } }, true); $("#view").addEventListener("keydown", onViewKey); $("#view").addEventListener("submit", onSubmit);
     $("#view").addEventListener("focusin", (e) => { if (e.target.id === "chatIn" && matchMedia("(pointer: coarse)").matches) { document.body.classList.add("kb"); sizeChat(); } });
-    $("#view").addEventListener("focusout", (e) => { if (e.target.id === "chatIn") setTimeout(() => { document.body.classList.remove("kb"); sizeChat(); }, 60); });
+    $("#view").addEventListener("focusout", (e) => { if (e.target.id === "chatIn") setTimeout(kbClosed, 60); });
     buildIndex(); openVault();
     document.addEventListener("keydown", onKey);
     renderFilters();
@@ -1709,7 +1709,11 @@ How to answer:
   async function postChat(cfg, sys, msgs, signal, maxTokens, stream, diag) {
     const pv = PROVIDERS[cfg.provider]; const key = cleanKey(cfg.key);
     if (!key || !/^[\x21-\x7E]+$/.test(key)) throw new Error("Your API key contains characters that can't be sent. Paste it again in Settings → AI analyst.");
-    const r = await fetch(pv.url, { method: "POST", headers: chatHeaders(cfg, key), body: JSON.stringify(chatBody(cfg, sys, msgs, maxTokens, stream)), signal, credentials: "omit", referrerPolicy: "no-referrer", cache: "no-store" });
+    const payload = JSON.stringify(chatBody(cfg, sys, msgs, maxTokens, stream));
+    if (diag) diag.reqKB = Math.round(payload.length / 1024);
+    let r;
+    try { r = await fetch(pv.url, { method: "POST", headers: chatHeaders(cfg, key), body: payload, signal, credentials: "omit", referrerPolicy: "no-referrer", cache: "no-store" }); }
+    catch (e) { if (e && typeof e === "object") { e.phase = stream ? "connecting (streaming)" : "connecting (single reply)"; e.reqKB = diag && diag.reqKB; } throw e; }
     if (diag) diag.status = r.status;
     if (!r.ok) {
       const t = await r.text(); if (diag) diag.raw = capRaw(t, 20000);
@@ -1731,7 +1735,9 @@ How to answer:
     } else {
       const rd = r.body.getReader(), dec = new TextDecoder();
       for (;;) {
-        const { value, done } = await rd.read();
+        let value, done;
+        try { ({ value, done } = await rd.read()); }
+        catch (e) { if (e && typeof e === "object") { e.phase = "reading the stream"; e.got = diag.raw.length; e.reqKB = diag.reqKB; } throw e; }
         if (value && value.byteLength) push(dec.decode(value, { stream: true }));
         yield* drain();
         if (done) { push(dec.decode()); yield* drain(); if (buf) { const t = sseText(cfg, buf, diag); if (t) yield t; } break; }
@@ -1760,7 +1766,11 @@ How to answer:
     if (e.status === 429) return `${L} says you're rate-limited or out of credit. Wait a moment or check billing.`;
     if (e.status === 404 || (e.status === 400 && /model/i.test(e.message))) return `${L} doesn't recognise the model “${cfg.model}”. Pick another in Settings → AI analyst. (${e.message})`;
     if (e.status) return `${L} returned an error (${e.status}): ${e.message}`;
-    if (e instanceof TypeError) return navigator.onLine === false ? "You're offline." : `Couldn't reach ${L}. This is usually a weak connection or a key pasted with hidden characters. Re-paste the key in Settings → AI analyst and try again.`;
+    if (e instanceof TypeError || (e && e.phase)) {
+      if (navigator.onLine === false) return "You're offline.";
+      const det = [`${e.name || "Error"}: ${scrubDiag(e.message || "no message")}`, e.phase ? `while ${e.phase}` : "", e.got ? `after ${e.got} bytes` : "", e.reqKB ? `request ${e.reqKB} KB` : "", e.fallback ? `single-reply retry also failed (${e.fallback})` : ""].filter(Boolean).join(", ");
+      return `Couldn't reach ${L} (${det}). The request never got a reply from ${L}'s server, so this is the connection, not your key or model. Check your signal and try again; if it keeps happening, switch off "Dashboard" in the chips above the box to send a smaller request.`;
+    }
     return e.message || "Something went wrong.";
   }
   let paintQ = false;
@@ -1783,7 +1793,17 @@ How to answer:
     const sys = systemPrompt(); A.msgs.push(reply); AU.draft = ""; AU.busy = true; AU.ctl = new AbortController(); render(); scrollChat(true);
     try {
       const diag = { raw: "", events: 0, stopReason: "", status: 0 };
-      for await (const t of streamChat(cfg, sys, hist.slice(-24), AU.ctl.signal, undefined, diag)) { reply.content += t; paintLast(reply); }
+      try { for await (const t of streamChat(cfg, sys, hist.slice(-24), AU.ctl.signal, undefined, diag)) { reply.content += t; paintLast(reply); } }
+      catch (se) {
+        // A network-level failure while streaming (iOS reports "TypeError: Load failed") gets one non-streaming retry.
+        if (se.name === "AbortError" || se.status || !(se instanceof TypeError || se.phase)) throw se;
+        if (reply.content) { reply.content += `\n\n_The connection dropped before the reply finished (${se.name}: ${scrubDiag(se.message)})._`; se.handled = true; }
+        else {
+          const retryDiag = { raw: "", events: 0, stopReason: "", status: 0 };
+          try { reply.content = await completeChat(cfg, sys, hist.slice(-24), AU.ctl.signal, undefined, retryDiag) || emptyReplyMsg(diag, retryDiag); se.handled = true; }
+          catch (re) { if (re.name === "AbortError" || re.status) throw re; se.fallback = `${re.name}: ${scrubDiag(re.message)}`; throw se; }
+        }
+      }
       if (!reply.content) {
         const retryDiag = { raw: "", events: 0, stopReason: "", status: 0 };
         reply.content = await completeChat(cfg, sys, hist.slice(-24), AU.ctl.signal, undefined, retryDiag) || emptyReplyMsg(diag, retryDiag);
@@ -1894,6 +1914,20 @@ How to answer:
           ${AU.busy ? `<button class="sendb stop" type="button" data-act="stop" aria-label="Stop">■</button>` : `<button class="sendb" type="submit" aria-label="Send"${AU.draft.trim() ? "" : " disabled"}>↑</button>`}</div>
         <div class="disc">AI analysis, not financial advice · only switched-on context is sent to ${esc(pv.label)}</div></form>
       </div>${side}</div>`;
+  }
+  // iOS keyboard: the tab bar hides while the chat box has focus; when the keyboard goes away, undo any scroll iOS left behind
+  // (a scrolled standalone page leaves a gap under position:fixed bars) and re-measure.
+  function kbClosed() {
+    if (document.activeElement && document.activeElement.id === "chatIn" && window.visualViewport && visualViewport.height < innerHeight * 0.8) return;
+    document.body.classList.remove("kb");
+    if (st && st.view === "Analyst" && !isWide()) window.scrollTo(0, 0);
+    sizeChat();
+  }
+  function onVV() {
+    const kbOpen = window.visualViewport && visualViewport.height < innerHeight * 0.8;
+    if (!kbOpen && document.body.classList.contains("kb") && !(document.activeElement && document.activeElement.id === "chatIn")) kbClosed();
+    else if (!kbOpen && st && st.view === "Analyst" && !isWide() && (window.scrollY || visualViewport.offsetTop)) window.scrollTo(0, 0);
+    sizeChat();
   }
   function sizeChat() {
     const w = document.querySelector(".chatwrap"); if (!w || st.view !== "Analyst") return;
