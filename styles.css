@@ -483,3 +483,16 @@ button.schip:hover{border-color:var(--acc)}
 svg.cdia{width:100%;max-width:520px;height:auto;display:block;margin:0 auto}svg.cdia .ce{stroke:var(--muted);stroke-width:1.2;opacity:.7}svg.cdia marker path{fill:var(--muted)}
 svg.cdia .cn{cursor:pointer}svg.cdia .cn circle{fill:var(--acc)}svg.cdia .cn text{fill:var(--ink);font-size:10.5px;font-weight:600}
 .schain .tk,.dh1 .tk,.lgrp .tk,.lrow .tk,.ycard .tk,.ythem .tk,.crow .tk,.cdia+.tk,.card>.tk{color:var(--muted);font-size:12px;line-height:1.45}
+
+/* v12: phone tab bar flush with the bottom edge, one safe-area inset (the home indicator may overlap the bottom padding, as in native tab bars) */
+@media (max-width:899px){
+  .tabs{padding:4px max(4px,env(safe-area-inset-right)) max(4px,calc(env(safe-area-inset-bottom) - 14px)) max(4px,env(safe-area-inset-left))}
+  .tabs button{padding:4px 0 2px;min-height:46px;min-width:0}
+  .tabs button .tl{font-size:10.5px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .app{padding-bottom:calc(max(4px,env(safe-area-inset-bottom) - 14px) + 76px)}
+  body.v-analyst{overflow:hidden;overscroll-behavior:none}
+  body.v-analyst .app{padding-bottom:0}
+  body.v-analyst .composer{margin-bottom:0}
+  .toast{bottom:calc(max(4px,env(safe-area-inset-bottom) - 14px) + 70px)}
+}
+@media (max-width:360px){.tabs button .tl{font-size:9.5px}}
