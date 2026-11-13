@@ -100,7 +100,10 @@
   });
 
   // ---------- app constants ----------
-  const THEMES = ["Defence", "AI supply chain", "Crypto"];
+  const STOCK_THEMES = ["Defence", "AI supply chain", "Crypto", "Healthcare and pharma", "Banks and financials", "Energy", "Mining and commodities", "Consumer", "Industrials", "Utilities", "Property", "Telecoms"];
+  const DEFAULT_THEMES = ["Defence", "AI supply chain", "Crypto"];
+  let THEMES = DEFAULT_THEMES.slice();
+  let TM = null;
   const ACTIONS = ["Buy", "Accumulate on dips", "Watch", "Trim", "Avoid"];
   const FACTORS = [
     { key: "m", label: "Theme momentum / catalyst strength", short: "Mom", what: "Strength of the theme and news flow" },
@@ -115,19 +118,19 @@
   const STANCE_TONE = { Overweight: "success", Neutral: "neutral", Underweight: "warning" };
   const DIR_TONE = { Positive: "success", Negative: "danger", Mixed: "neutral", Pending: "neutral" };
   const IMPACT_TONE = { Positive: "success", Negative: "danger", Mixed: "neutral" };
-  const VIEWS = ["Brief", "Focus", "Scoreboard", "Themes", "Crypto", "Calendar", "Sources", "Portfolio", "Analyst"];
-  // keys 1-9 then 0 follow this order; on phones Scoreboard/Themes/Crypto/Calendar/Sources/Settings live under "More"
-  const TABS = [["Brief", "☀"], ["Focus", "◎"], ["Scoreboard", "≡"], ["Themes", "◇"], ["Crypto", "₿"], ["Calendar", "▦"], ["Sources", "↗"], ["Portfolio", "◔"], ["Analyst", "✦"], ["Settings", "⚙"]];
-  const OVERFLOW = ["Scoreboard", "Themes", "Crypto", "Calendar", "Sources", "Settings"];
+  const VIEWS = ["Brief", "Focus", "Scoreboard", "Themes", "Crypto", "Calendar", "Sources", "Supply chain", "Portfolio", "Analyst"];
+  // keys 1-9 then 0 follow this order; on phones overflow views live under "More"
+  const TABS = [["Brief", "☀"], ["Focus", "◎"], ["Scoreboard", "≡"], ["Themes", "◇"], ["Crypto", "₿"], ["Calendar", "▦"], ["Sources", "↗"], ["Supply chain", "⧉"], ["Portfolio", "◔"], ["Analyst", "✦"], ["Settings", "⚙"]];
+  const OVERFLOW = ["Scoreboard", "Themes", "Crypto", "Calendar", "Sources", "Supply chain", "Settings"];
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const RANGES = { "1M": 31, "3M": 92, "6M": 183, "1Y": 366 };
   const CHECK = { open: ["On open only", 0], "15m": ["Every 15 min", 15], "1h": ["Every hour", 60], "4h": ["Every 4 hours", 240] };
 
   let D, W, ranked, st, pending = null, timer = null;
-  const IDEA_VIEWS = ["Focus", "Scoreboard", "Themes", "Crypto"];
+  const IDEA_VIEWS = ["Focus", "Scoreboard", "Themes", "Crypto", "Supply chain"];
   const isWide = () => matchMedia("(min-width: 900px)").matches;
   // global filters (theme, action, min score) apply to every idea list
-  const vis = (arr) => arr.filter((i) => (st.fTheme === "All" || i.theme === st.fTheme) && (st.fAction === "All" || i.action === st.fAction) && score10(i) >= Number(st.fMin) * 10);
+  const vis = (arr) => arr.filter((i) => themeOn(i.theme) && (st.fTheme === "All" || themeId(i.theme) === themeId(st.fTheme)) && (st.fAction === "All" || i.action === st.fAction) && score10(i) >= Number(st.fMin) * 10);
   const pill = (t, tone) => `<span class="pill t-${tone}">${esc(t)}</span>`;
   const score10 = (i) => Math.round(FACTORS.reduce((a, f) => a + i.s[f.key] * W[f.key], 0) / 10);
   const fmt = (t) => (t / 10).toFixed(1);
@@ -140,6 +143,60 @@
   }
   const mkt = (i) => (D.market && D.market.assets && D.market.assets[i.name]) || null;
   const keyOf = (i) => i.ticker + "|" + i.name;
+  function defaultThemeItems() {
+    const fromData = new Set((D && D.ideas || []).map((i) => i.theme).filter(Boolean));
+    return STOCK_THEMES.map((name) => ({ id: name, name, on: DEFAULT_THEMES.includes(name) || fromData.has(name), stock: true }));
+  }
+  function themePrefs() {
+    const base = defaultThemeItems();
+    const extras = [];
+    if (TM && Array.isArray(TM.items)) {
+      const seen = new Set();
+      const out = [];
+      for (const it of TM.items) {
+        const id = String(it.id || it.name || "").trim(); if (!id || seen.has(id)) continue;
+        seen.add(id);
+        const stock = STOCK_THEMES.includes(id) || it.stock === true;
+        const name = String(it.name || id).trim() || id;
+        out.push({ id, name, on: it.on !== false, stock });
+      }
+      for (const b of base) if (!seen.has(b.id)) { seen.add(b.id); out.push(b); }
+      return { v: 1, items: out };
+    }
+    const seen = new Set(base.map((x) => x.id));
+    for (const i of (D && D.ideas) || []) if (i.theme && !seen.has(i.theme)) { seen.add(i.theme); extras.push({ id: i.theme, name: i.theme, on: true, stock: false }); }
+    return { v: 1, items: base.concat(extras) };
+  }
+  function themeItem(raw) {
+    const t = String(raw || "");
+    return themePrefs().items.find((x) => x.id === t || x.name === t) || null;
+  }
+  function themeId(raw) { const it = themeItem(raw); return it ? it.id : String(raw || ""); }
+  function themeName(raw) { const it = themeItem(raw); return it ? it.name : String(raw || ""); }
+  function themeOn(raw) { const it = themeItem(raw); return it ? !!it.on : true; }
+  function themes() {
+    const prefs = themePrefs(), names = [];
+    for (const it of prefs.items) if (it.on) names.push(it.id);
+    const seen = new Set(prefs.items.map((x) => x.id));
+    for (const i of (D && D.ideas) || []) if (i.theme && !seen.has(i.theme)) { seen.add(i.theme); names.push(i.theme); }
+    return names;
+  }
+  function themeIdx(raw) {
+    const id = themeId(raw);
+    const pool = [...STOCK_THEMES, ...themePrefs().items.filter((x) => !STOCK_THEMES.includes(x.id)).map((x) => x.id)];
+    let n = pool.indexOf(id); if (n < 0) n = THEMES.indexOf(id);
+    return n < 0 ? 0 : n % 8;
+  }
+  function stanceOf(raw) {
+    const id = themeId(raw);
+    return (D.themeStances && (D.themeStances[id] || D.themeStances[raw] || D.themeStances[themeName(raw)]))
+      || { stance: "Neutral", line: "No dashboard stance has been written for this theme yet.", flip: "—" };
+  }
+  function refreshThemes() {
+    THEMES = themes();
+    if (st && THEMES.length && !THEMES.includes(themeId(st.theme))) st.theme = THEMES[0];
+  }
+  const saveThemes = () => { if (!TM) TM = themePrefs(); return vaultSave("themes", TM); };
 
   // ---------- number formatting ----------
   const big = (v, cur = "$") => {
@@ -162,14 +219,15 @@
   // ---------- start / render plumbing ----------
   function start(data) {
     D = data; W = data.weights; ranked = [...D.ideas].sort(byScore);
+    refreshThemes();
     const base = asOfDate();
     const saved = sessionStorage.getItem("view");
     st = { view: saved || (VIEWS.includes(S.startView) ? S.startView : "Focus"), group: "All", action: "All", sort: "overall", cols: "Decision",
-      theme: "Defence", cal: "All", month: iso(base).slice(0, 7), detail: null, range: "6M", back: null,
+      theme: "Defence", chainTheme: "All", cal: "All", month: iso(base).slice(0, 7), detail: null, range: "6M", back: null,
       q: "", fTheme: "All", fAction: "All", fMin: "0", showFilters: false, brief: null, briefQ: "" };
     $("#lock").hidden = true; $("#app").hidden = false;
     $("#tabs").innerHTML = `<div class="navIn"><div class="brand"><img src="icons/icon-192.png" alt="" width="28" height="28"><span>Invest Intel</span></div>`
-      + TABS.map(([v, ic], n) => `${v === "Portfolio" ? `<div class="navsep" aria-hidden="true"><span>You</span></div>` : ""}<button data-tab="${v}" aria-keyshortcuts="${(n + 1) % 10}"${OVERFLOW.includes(v) ? ' class="ovf"' : ""}><span class="ic">${ic}</span><span class="tl">${v}</span><kbd>${(n + 1) % 10}</kbd></button>`).join("")
+      + TABS.map(([v, ic], n) => `${v === "Portfolio" ? `<div class="navsep" aria-hidden="true"><span>You</span></div>` : ""}<button data-tab="${v}"${n < 10 ? ` aria-keyshortcuts="${(n + 1) % 10}"` : ""}${OVERFLOW.includes(v) ? ' class="ovf"' : ""}><span class="ic">${ic}</span><span class="tl">${v === "Supply chain" ? "Supply" : v}</span>${n < 10 ? `<kbd>${(n + 1) % 10}</kbd>` : ""}</button>`).join("")
       + `<button data-more class="more" aria-haspopup="dialog"><span class="ic">⋯</span><span class="tl">More</span></button>`
       + `<div class="kbhelp"><kbd>1</kbd>–<kbd>0</kbd> views · <kbd>/</kbd> search · <kbd>j</kbd><kbd>k</kbd> move · <kbd>[</kbd><kbd>]</kbd> older/newer brief · <kbd>Esc</kbd> close</div></div>`;
     $("#tabs").onclick = (e) => { if (e.target.closest("[data-more]")) { openMore(); return; } const b = e.target.closest("[data-tab]"); if (b) goTab(b.dataset.tab); };
@@ -301,7 +359,7 @@
   function applyPending() {
     if (!pending) return;
     if (!pending.data) { lockNow(); return; }
-    payload = pending.p; D = pending.data; W = D.weights; ranked = [...D.ideas].sort(byScore); pending = null; checkMsg = "Updated"; buildIndex();
+    payload = pending.p; D = pending.data; W = D.weights; ranked = [...D.ideas].sort(byScore); pending = null; checkMsg = "Updated"; refreshThemes(); buildIndex();
     hideBanner(); render();
   }
   function showBanner(msg) {
@@ -339,7 +397,7 @@
     const px = m && m.price ? `<span class="px">${money(m.price.last, m.price.currency)} <span class="${m.price.change1d >= 0 ? "pos" : "neg"}">${pct(m.price.change1d)}</span></span>` : "";
     return `<button class="card idea${st.detail === keyOf(i) ? " sel" : ""}" data-open="${esc(keyOf(i))}" aria-label="Open ${esc(i.name)} details"${st.detail === keyOf(i) ? ' aria-current="true"' : ""}>
       <div class="row1"><div><div class="nm">${esc(i.name)} <span class="tk">${esc(i.ticker)} · ${esc(i.listing)}</span></div>
-      <div>${pill(i.action, ACTION_TONE[i.action])} <span class="tk">${esc(i.theme)} · ${esc(i.role)}</span></div></div>
+      <div>${pill(i.action, ACTION_TONE[i.action])} <span class="tk">${esc(themeName(i.theme))} · ${esc(i.role)}</span></div></div>
       <div class="rt"><div class="score">${fmt(score10(i))}</div>${spark(i)}</div></div>
       ${px ? `<div class="cat">${px}</div>` : ""}
       ${opts.link && i.link ? `<div class="cat">${esc(i.link)}</div>` : ""}
@@ -360,12 +418,12 @@
     for (let v = y0; v <= y1; v += (y1 - y0) / 6) g += `<line class="ax" x1="${L}" x2="${Wd - R}" y1="${sy(v)}" y2="${sy(v)}"/><text x="${L - 4}" y="${sy(v) + 3}" text-anchor="end">${+v.toFixed(1)}</text>`;
     const dots = pts.map((p) => {
       const r = sized ? 2 + p.size * 0.7 : 4.5;
-      return `<g class="pt" data-open="${esc(p.k)}"><circle class="d${THEMES.indexOf(p.series)}" cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${r.toFixed(1)}" fill-opacity="0.8"/>
+      return `<g class="pt" data-open="${esc(p.k)}"><circle class="d${themeIdx(p.series)}" cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${r.toFixed(1)}" fill-opacity="0.8"/>
       <text class="lab" x="${(sx(p.x) + r + 1.5).toFixed(1)}" y="${(sy(p.y) + 3).toFixed(1)}">${esc(p.label)}</text></g>`;
     }).join("");
     return `<div class="card"><svg class="sc" viewBox="0 0 ${Wd} ${H}" role="img" aria-label="${esc(yName)} vs ${esc(xName)}">${g}${dots}
       <text x="${(L + Wd - R) / 2}" y="${H - 4}" text-anchor="middle">${esc(xName)}</text></svg>
-      <div class="legend">${THEMES.map((t, n) => `<span><i class="l${n}"></i>${esc(t)}</span>`).join("")}<span>↑ ${esc(yName)}</span></div></div>`;
+      <div class="legend">${THEMES.map((t) => `<span><i class="l${themeIdx(t)}"></i>${esc(themeName(t))}</span>`).join("")}<span>↑ ${esc(yName)}</span></div></div>`;
   }
 
   function monthGrid(ym) {
@@ -409,10 +467,54 @@
       <span class="track"><span class="fill ${vals[k] < 0 ? "negf" : ""}" data-w="${(Math.abs(vals[k]) / mx * 100).toFixed(1)}"></span></span><span class="tbv">${esc(usdM(vals[k]))}</span></div>`).join("")}</div>`;
   }
 
+  function coveredIdea(name) {
+    const q = String(name || "").toLowerCase(); if (!q) return null;
+    return D.ideas.find((i) => i.name.toLowerCase() === q || i.ticker.toLowerCase() === q
+      || i.ticker.toLowerCase().split(/\s*\/\s*/).includes(q)
+      || (D.match && D.match[i.name] && (D.match[i.name].aliases || []).some((a) => String(a).toLowerCase() === q))) || null;
+  }
+  function partyList(arr) {
+    if (!arr || !arr.length) return `<div class="muted small">No sourced names yet.</div>`;
+    return `<div class="plist">${arr.map((p) => {
+      const hit = coveredIdea(p.name); const role = p.role ? `<span class="tk"> · ${esc(p.role)}</span>` : "";
+      return `<div class="pitem">${hit ? `<button class="lnk" data-open="${esc(keyOf(hit))}">${esc(p.name)}</button>` : `<span>${esc(p.name)}</span>`}${role}</div>`;
+    }).join("")}</div>`;
+  }
+  function srcLine(it) {
+    if (!it || (!it.source && !it.url)) return "";
+    const label = it.source || "Source";
+    return it.url ? `<a href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">${esc(label)} ↗</a>` : esc(label);
+  }
+  function chainRows(items, kind) {
+    if (!items || !items.length) return `<div class="muted small">No sourced ${esc(kind)} yet.</div>`;
+    return `<div class="clist">${items.map((it) => {
+      const title = it.who || it.what || it.counterparty || "—";
+      const bits = [it.who && it.what ? it.what : "", it.value, it.length, it.horizon, it.date, it.counterparty && it.who !== it.counterparty ? it.counterparty : ""].filter(Boolean);
+      return `<div class="citem"><div class="ct">${esc(title)}</div>${bits.length ? `<div class="cdet">${esc(bits.join(" · "))}</div>` : ""}${it.source || it.url ? `<div class="tk">${srcLine(it)}</div>` : ""}</div>`;
+    }).join("")}</div>`;
+  }
+  function growthBlock(i) {
+    const m = mkt(i);
+    const cells = [["1M", chgOver(m, RANGES["1M"])], ["6M", chgOver(m, RANGES["6M"])], ["1Y", chgOver(m, RANGES["1Y"])], ["YTD", chgYtd(m)]];
+    const rg = revGrowth(m);
+    return `<div class="ggrid">${cells.map(([l, v]) => `<div class="gcell"><div class="kl">${l}</div><div class="${v == null ? "tk" : v >= 0 ? "pos" : "neg"}">${v == null ? "—" : pct(v)}</div></div>`).join("")}
+      <div class="gcell wide"><div class="kl">Revenue growth</div><div class="${!rg ? "tk" : rg.pct >= 0 ? "pos" : "neg"}">${rg ? `${pct(rg.pct)}${rg.from && rg.to ? ` <span class="tk">${esc(rg.from)} → ${esc(rg.to)}</span>` : ""}` : "—"}</div></div></div>
+      ${m && m.price && m.price.source ? `<div class="tk">Share-price returns from ${esc(m.price.source)}, last close ${esc(dLabel(m.price.asOf || ""))}. Revenue growth is the latest annual period versus the one before, where statement data is available. A dash means no source, not zero.</div>` : `<div class="tk">Price or statement data is not available from the free sources this build uses.</div>`}`;
+  }
+  function chainSection(i) {
+    const sc = i.supplyChain || {};
+    return `<h3>Supply chain</h3><div class="card schain">
+      <div class="slbl">In talks</div>${chainRows(sc.inTalks, "talks")}
+      <div class="slbl">Committed</div>${chainRows(sc.committed, "contracts, backlog or orders")}
+      <div class="slbl">Opportunity size</div>${chainRows(sc.opportunity, "opportunity estimates")}
+      <div class="slbl">Growth</div>${growthBlock(i)}
+      <div class="slbl">Customers</div>${partyList(sc.customers)}
+      <div class="slbl">Suppliers</div>${partyList(sc.suppliers)}</div>`;
+  }
   function detail(i) {
     const m = mkt(i) || {}; const p = m.price, f = m.financials, s = m.stats, c = m.crypto;
     let out = `${splitOn() ? "" : `<button class="back" data-act="back">‹ Back</button>`}
-      <div class="card dh1"><div class="row1"><div><h2 class="dname">${esc(i.name)}</h2><div class="tk">${esc(i.ticker)} · ${esc(i.listing)} · ${esc(i.theme)} · ${esc(i.role)}</div>
+      <div class="card dh1"><div class="row1"><div><h2 class="dname">${esc(i.name)}</h2><div class="tk">${esc(i.ticker)} · ${esc(i.listing)} · ${esc(themeName(i.theme))} · ${esc(i.role)}</div>
       <div class="mt6">${pill(i.action, ACTION_TONE[i.action])}</div></div><div class="score big">${fmt(score10(i))}<div class="tk">/10</div></div></div>
       <div class="dacts"><button class="btn ask" data-act="ask" data-k="${esc(keyOf(i))}"><span aria-hidden="true">✦</span> Ask the analyst</button></div></div>
       ${positionCard(i)}`;
@@ -478,6 +580,7 @@
     out += `</div></div>`;
     const miss = (D.market && D.market.missing || []).find((x) => x.name === i.name);
     if (miss) out += `<div class="tk mt6">Not available: ${esc(miss.missing.join("; "))}.</div>`;
+    out += chainSection(i);
     return out;
   }
 
@@ -519,8 +622,9 @@
       try {
         P = (await vaultLoad("portfolio")) || newPortfolio();
         const ai = await vaultLoad("ai"), chat = await vaultLoad("chat"); REV = await vaultLoad("review");
+        TM = await vaultLoad("themes");
         A = { cfg: Object.assign({ provider: "anthropic", models: {}, keys: {} }, ai || {}), msgs: (chat && chat.msgs) || [] };
-        VS.ready = true;
+        VS.ready = true; refreshThemes();
       } catch (e) { VS.err = "Could not open the on-device vault (" + (e.message || "decrypt failed") + ")."; }
     }
     if (D) render();
@@ -539,7 +643,7 @@
     if (!VS.ready) return `<div class="card muted">Opening on-device vault…</div>`;
     const st0 = Object.keys(VS.stale);
     if (st0.length) return `<form class="card gate" data-form="stalepass"><div class="gic">↺</div><h3>Bring across your saved data</h3>
-      <p class="muted">Your ${esc(st0.map((n) => ({ portfolio: "portfolio", ai: "analyst settings", chat: "chat history", review: "saved AI review" }[n])).join(", "))} on this device was encrypted with your previous passcode. Enter that passcode to re-encrypt it with the current one.</p>
+      <p class="muted">Your ${esc(st0.map((n) => ({ portfolio: "portfolio", ai: "analyst settings", chat: "chat history", review: "saved AI review", themes: "theme choices" }[n] || n)).join(", "))} on this device was encrypted with your previous passcode. Enter that passcode to re-encrypt it with the current one.</p>
       <input type="password" name="pass" placeholder="Previous passcode" autocomplete="off" aria-label="Previous passcode" required>
       <div class="srow"><button class="btn primary" type="submit">Restore</button><button class="btn" type="button" data-act="discardStale">Start fresh instead</button></div><p class="err" data-err></p></form>`;
     return "";
@@ -1252,15 +1356,15 @@ Rules:
   // =====================================================================================
   // Portfolio view
   // =====================================================================================
-  const EXP_TONE = (k) => ACTION_TONE[k] || (THEMES.includes(k) ? "accent" : "neutral");
+  const EXP_TONE = (k) => ACTION_TONE[k] || (themeItem(k) || (D && D.ideas && D.ideas.some((i) => i.theme === k)) ? "accent" : "neutral");
   function expBars(rows, kind) {
     if (!rows.length) return `<div class="muted small">No priced holdings yet.</div>`;
-    return `<div class="xbars">${rows.map((r) => `<div class="xb"><div class="xl">${kind === "action" && ACTION_TONE[r.k] ? pill(r.k, ACTION_TONE[r.k]) : `<span class="xn">${kind === "theme" && THEMES.includes(r.k) ? `<i class="l${THEMES.indexOf(r.k)}"></i>` : ""}${esc(r.k)}</span>`}</div>
-      <div class="track"><div class="fill x-${kind === "action" ? EXP_TONE(r.k) : kind === "theme" ? "t" + THEMES.indexOf(r.k) : "accent"}" data-w="${r.w.toFixed(1)}"></div></div><div class="xv"><b>${r.w.toFixed(1)}%</b><span class="tk">${esc(bm(r.v, 0))}</span></div></div>`).join("")}</div>`;
+    return `<div class="xbars">${rows.map((r) => `<div class="xb"><div class="xl">${kind === "action" && ACTION_TONE[r.k] ? pill(r.k, ACTION_TONE[r.k]) : `<span class="xn">${kind === "theme" ? `<i class="l${themeIdx(r.k)}"></i>` : ""}${esc(kind === "theme" ? themeName(r.k) : r.k)}</span>`}</div>
+      <div class="track"><div class="fill x-${kind === "action" ? EXP_TONE(r.k) : kind === "theme" ? "t" + themeIdx(r.k) : "accent"}" data-w="${r.w.toFixed(1)}"></div></div><div class="xv"><b>${r.w.toFixed(1)}%</b><span class="tk">${esc(bm(r.v, 0))}</span></div></div>`).join("")}</div>`;
   }
   function stackBar(rows) {
     if (!rows.length) return "";
-    return `<div class="stack" role="img" aria-label="Exposure by theme">${rows.map((r) => `<span class="seg x-${THEMES.includes(r.k) ? "t" + THEMES.indexOf(r.k) : "neutral"}" data-w="${r.w.toFixed(2)}" title="${esc(r.k)} ${r.w.toFixed(1)}%"></span>`).join("")}</div>`;
+    return `<div class="stack" role="img" aria-label="Exposure by theme">${rows.map((r) => `<span class="seg x-t${themeIdx(r.k)}" data-w="${r.w.toFixed(2)}" title="${esc(themeName(r.k))} ${r.w.toFixed(1)}%"></span>`).join("")}</div>`;
   }
   function portfolioSide(c) {
     c = c || (P && VS.ready ? pfCalc() : null);
@@ -1372,6 +1476,15 @@ Rules:
   function chgOver(m, days) {
     if (!m || !m.price || !m.price.pts || m.price.pts.length < 2) return null; const pts = m.price.pts, last = pts[pts.length - 1];
     const from = new Date(last[0]); from.setDate(from.getDate() - days); const p0 = pts.find((p) => new Date(p[0]) >= from); return p0 ? r1((last[1] / p0[1] - 1) * 100) : null;
+  }
+  function chgYtd(m) {
+    if (!m || !m.price || !m.price.pts || m.price.pts.length < 2) return null;
+    const pts = m.price.pts, last = pts[pts.length - 1], y = new Date(last[0]).getFullYear();
+    const p0 = pts.find((p) => new Date(p[0]).getFullYear() === y); return p0 ? r1((last[1] / p0[1] - 1) * 100) : null;
+  }
+  function revGrowth(m) {
+    const f = m && m.financials; if (!f || !f.revenue || f.revenue[0] == null || f.revenue[1] == null || !f.revenue[1]) return null;
+    return { pct: r1((f.revenue[0] / f.revenue[1] - 1) * 100), from: f.periods && f.periods[1], to: f.periods && f.periods[0] };
   }
   function ideaCtx(i, full) {
     const m = mkt(i) || {}, o = { name: i.name, ticker: i.ticker, listing: i.listing, theme: i.theme, role: i.role, action: i.action, score: +fmt(score10(i)),
@@ -1716,6 +1829,12 @@ How to answer:
         const v = parseFloat(f.cap.value); if (!(v >= 2 && v <= 40)) throw new Error("Enter a cap between 2% and 40%.");
         P.review = { ...(P.review || {}), customCap: half(v) }; await savePortfolio(); render(); toast(`Top cap set to ${pct1(half(v))}`); return;
       }
+      if (k === "themeAdd") {
+        const name = (f.name.value || "").trim(); if (!name) throw new Error("Enter a theme name.");
+        TM = themePrefs();
+        if (TM.items.some((x) => x.id.toLowerCase() === name.toLowerCase() || x.name.toLowerCase() === name.toLowerCase())) throw new Error("That theme is already on the list.");
+        TM.items.push({ id: name, name, on: true, stock: false }); await saveThemes(); refreshThemes(); render(); toast("Theme added"); return;
+      }
       if (k === "ai") {
         const pvId = curCfg().provider, model = f.model.value === "__custom" ? f.custom.value.trim() : f.model.value, key = cleanKey(f.key.value);
         if (!model) throw new Error("Enter a model ID.");
@@ -1745,7 +1864,7 @@ How to answer:
       catch (e) { msg.className = "err"; msg.textContent = e.name === "AbortError" ? "Timed out" : errText(e, curCfg()); } finally { b.disabled = false; }
     },
     aiRemove: async () => { if (!confirm("Remove the saved API key from this device?")) return; delete A.cfg.keys[curCfg().provider]; await saveAI(); render(); toast("Key removed"); },
-    wipeLocal: async () => { if (!confirm("Delete your holdings, chat history, AI review and AI key from this device? This can't be undone (export a backup first).")) return; for (const n of ["portfolio", "ai", "chat", "review"]) await vdel(n); REV = null; AU.focus = null; await openVault(); toast("On-device data deleted"); },
+    wipeLocal: async () => { if (!confirm("Delete your holdings, chat history, AI review, theme choices and AI key from this device? This can't be undone (export a backup first).")) return; for (const n of ["portfolio", "ai", "chat", "review", "themes"]) await vdel(n); REV = null; TM = null; AU.focus = null; await openVault(); toast("On-device data deleted"); },
   });
   // =====================================================================================
   // Holdings review: a transparent, on-device decision engine (no AI key needed) that turns the
@@ -2201,18 +2320,46 @@ Reply with ONLY this JSON, no prose, no code fences:
     const ed = e.target.closest("[data-edit]"); if (ed) { const h = P.holdings.find((x) => x.id === ed.dataset.edit); if (h) openSheet("edit", { id: h.id, h: { ...h } }); return true; }
     return false;
   }
+  async function applyThemeEdit(mut) {
+    if (!VS.ready || !canEnc()) { toast("Unlock the on-device vault to change themes", "bad"); return; }
+    TM = themePrefs(); mut(TM); await saveThemes(); refreshThemes(); render();
+  }
+  Object.assign(EXTRA_ACTS, {
+    themeToggle: (b) => applyThemeEdit((tm) => { const it = tm.items.find((x) => x.id === b.dataset.id); const box = b.matches && b.matches("input") ? b : b.querySelector && b.querySelector("input"); if (it) it.on = box ? !!box.checked : !it.on; }),
+    themeDel: (b) => { if (!confirm("Remove this custom theme from this device?")) return; applyThemeEdit((tm) => { tm.items = tm.items.filter((x) => x.id !== b.dataset.id); }); },
+  });
   function extraChange(e) {
     if (e.target.name === "model" && e.target.closest("form[data-form=ai]")) { const c = e.target.closest("form").querySelector("[data-custom]"); AU.showCustom = e.target.value === "__custom"; c.classList.toggle("hide", !AU.showCustom); return true; }
+    if (e.target.dataset.thName) {
+      const id = e.target.dataset.thName, name = e.target.value.trim();
+      if (!name) return true;
+      applyThemeEdit((tm) => { const it = tm.items.find((x) => x.id === id); if (it) it.name = name; });
+      return true;
+    }
     return false;
+  }
+  function themeSettings() {
+    const items = themePrefs().items;
+    const rows = items.map((it) => `<div class="trow">
+      <label class="tog sm" data-act="themeToggle" data-id="${esc(it.id)}"><input type="checkbox"${it.on ? " checked" : ""}><span class="tk">${it.stock ? "Ready-made" : "Custom"}</span></label>
+      <input class="tname" data-th-name="${esc(it.id)}" value="${esc(it.name)}" aria-label="Theme name" spellcheck="false">
+      ${it.stock ? `<span class="tk stockn">${esc(it.id !== it.name ? it.id : "")}</span>` : `<button class="btn sm dangerT" type="button" data-act="themeDel" data-id="${esc(it.id)}" aria-label="Remove ${esc(it.name)}">Remove</button>`}
+    </div>`).join("");
+    return `<div class="card">
+      <p class="muted small">Switch themes on or off, rename them, or add your own. Choices are encrypted on this device with your passcode, like holdings. Filters, Focus and the score summaries follow the themes you switch on. Ideas with a theme that is not on this list still appear under their own name.</p>
+      ${rows}
+      <form class="srow mt12" data-form="themeAdd"><input name="name" placeholder="New theme name" aria-label="New theme name" required maxlength="40"><button class="btn primary" type="submit">Add theme</button></form>
+    </div>`;
   }
   function extraSettings() {
     const ai = VS.ready && A ? `<h3 id="ai-settings">AI analyst</h3><div class="card">${aiForm("settings")}
         <div class="srow mt12"><button class="btn" data-act="clearChat"${A.msgs.length ? "" : " disabled"}>Clear chat history (${A.msgs.length})</button></div></div>` : `<h3>AI analyst</h3>${vaultGate()}`;
     const pf = VS.ready && P ? `<h3>Portfolio data</h3><div class="card"><div class="slbl">Base currency</div><div class="chips">${["GBP", "USD", "EUR"].map((b) => `<button data-act="base" data-val="${b}" class="${P.base === b ? "on" : ""}">${b}</button>`).join("")}</div>
         <div class="srow"><button class="btn" data-act="backup">⇅ Backup and sync</button><span class="tk">${P.holdings.length} holdings on this device${P.updatedAt ? " · saved " + esc(new Date(P.updatedAt).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })) : ""}</span></div>
-        <button class="btn danger" data-act="wipeLocal">Delete holdings, chat and AI key from this device</button>
-        <div class="tk mt6">Holdings, chat and the AI key are AES-256-GCM encrypted with your passcode in this browser's storage. 🔒 Lock now clears them from memory.</div></div>` : "";
-    return reviewSettings() + ai + pf;
+        <button class="btn danger" data-act="wipeLocal">Delete holdings, chat, theme choices and AI key from this device</button>
+        <div class="tk mt6">Holdings, chat, theme choices and the AI key are AES-256-GCM encrypted with your passcode in this browser's storage. 🔒 Lock now clears them from memory.</div></div>` : "";
+    const th = `<h3>Dashboard themes</h3>` + (VS.ready ? themeSettings() : (vaultGate() || `<div class="card muted">Unlock the on-device vault to change themes.</div>`));
+    return th + reviewSettings() + ai + pf;
   }
   // ---------- views ----------
   const V = {
@@ -2229,7 +2376,7 @@ Reply with ONLY this JSON, no prose, no code fences:
           return `<button class="kact${st.fAction === a ? " on" : ""}" data-kpi-action="${esc(a)}">${pill(a, ACTION_TONE[a])}<b>${n}</b></button>`; }).join("")}</div></div>
         ${top ? `<button class="kpi" data-open="${esc(keyOf(top))}"><div class="kl">Top idea</div><div class="kv1">${esc(top.name)} <span class="kscore">${fmt(score10(top))}</span></div><div class="ks">${esc(top.action)} · ${esc(top.ticker)}</div></button>` : ""}
         ${nextC ? `<button class="kpi" data-goto="Calendar"><div class="kl">Next catalyst</div><div class="kv1">${esc(nextC.label)}</div><div class="ks">${esc(nextC.event)}</div></button>` : ""}
-        <button class="kpi kall" data-goto="Themes"><div class="kl">Theme stance</div><div class="kthemes">${THEMES.map((t) => `<span>${esc(t)} ${pill(D.themeStances[t].stance, STANCE_TONE[D.themeStances[t].stance])}</span>`).join("")}</div></button>
+        <button class="kpi kall" data-goto="Themes"><div class="kl">Theme stance</div><div class="kthemes">${THEMES.map((t) => { const s = stanceOf(t); return `<span>${esc(themeName(t))} ${pill(s.stance, STANCE_TONE[s.stance] || "neutral")}</span>`; }).join("")}</div></button>
       </div>`;
       return `${kpi}<h2>Act now <span class="tk">(${act.length})</span></h2><div class="cards">${act.length ? act.map((i) => ideaCard(i)).join("") : `<div class="card muted">No ideas match the current filters.</div>`}</div>
       <div class="grid2"><div><h2>What changed</h2>${list(D.changes.map((c) => ({ lead: c.date, title: c.what, detail: c.soWhat, pill: pill(c.impact, IMPACT_TONE[c.impact]) })))}</div>
@@ -2240,8 +2387,9 @@ Reply with ONLY this JSON, no prose, no code fences:
       <h2>Market backdrop</h2><div class="card"><dl class="kv">${D.marketBackdrop.map((m) => `<dt>${esc(m.label)}</dt><dd>${esc(m.value)}</dd>`).join("")}</dl></div>`;
     },
     Scoreboard() {
-      const groups = ["All", ...THEMES, "Second-order", "Near peak"].map((g) => [g, g, g === "All" ? D.ideas.length : D.ideas.filter((i) => i.theme === g || i.role === g).length]);
-      const board = vis(D.ideas).filter((i) => (st.group === "All" || i.theme === st.group || i.role === st.group) && (st.action === "All" || i.action === st.action))
+      const visAll = vis(D.ideas);
+      const groups = ["All", ...THEMES, "Second-order", "Near peak"].map((g) => [g, g === "All" || g === "Second-order" || g === "Near peak" ? g : themeName(g), g === "All" ? visAll.length : visAll.filter((i) => themeId(i.theme) === g || i.role === g).length]);
+      const board = vis(D.ideas).filter((i) => (st.group === "All" || themeId(i.theme) === st.group || i.role === st.group) && (st.action === "All" || i.action === st.action))
         .sort((a, b) => { const av = st.sort === "overall" ? score10(a) : a.s[st.sort] * 10, bv = st.sort === "overall" ? score10(b) : b.s[st.sort] * 10; return bv - av || byScore(a, b); });
       let rows;
       if (st.cols === "Scores") rows = `<div class="card"><table class="simple"><tr><th>Idea</th><th>All</th>${FACTORS.map((f) => `<th>${f.short}</th>`).join("")}</tr>
@@ -2262,10 +2410,10 @@ Reply with ONLY this JSON, no prose, no code fences:
         ${D.notes.actions ? `<div class="note">${esc(D.notes.actions)}</div>` : ""}`;
     },
     Themes() {
-      const t = st.theme, s = D.themeStances[t]; const inT = (r) => vis(ranked).filter((i) => i.theme === t && i.role === r);
+      const t = themeId(st.theme), s = stanceOf(t); const inT = (r) => vis(ranked).filter((i) => themeId(i.theme) === t && i.role === r);
       const sec = (h, r, o) => inT(r).length ? `<h2>${h}</h2><div class="cards">${inT(r).map((i) => ideaCard(i, o)).join("")}</div>` : "";
-      return `${chips("theme", THEMES.map((x) => [x, x, D.ideas.filter((i) => i.theme === x).length]))}
-        <h2>Theme stance</h2><div class="card"><dl class="kv"><dt>Stance</dt><dd>${pill(s.stance, STANCE_TONE[s.stance])}</dd>
+      return `${chips("theme", THEMES.map((x) => [x, themeName(x), vis(D.ideas).filter((i) => themeId(i.theme) === x).length]))}
+        <h2>Theme stance</h2><div class="card"><dl class="kv"><dt>Stance</dt><dd>${pill(s.stance, STANCE_TONE[s.stance] || "neutral")}</dd>
         <dt>Why</dt><dd>${esc(s.line)}</dd><dt>What would flip it</dt><dd>${esc(s.flip)}</dd></dl></div>
         ${sec("Core ideas", "Core")}${sec("Second-order plays", "Second-order", { link: true })}${sec("Leaders near peak", "Near peak")}
         <h2>What moved</h2>${linkList(D.news[t] || [])}`;
@@ -2313,6 +2461,22 @@ Reply with ONLY this JSON, no prose, no code fences:
     },
   };
 
+  V["Supply chain"] = function () {
+    const id = st.chainTheme || "All";
+    const rows = vis(ranked).filter((i) => id === "All" || themeId(i.theme) === id);
+    const cards = rows.map((i) => {
+      const sc = i.supplyChain || {}, top = (sc.committed || [])[0], y = chgOver(mkt(i), RANGES["1Y"]);
+      return `<button class="card idea schcard${st.detail === keyOf(i) ? " sel" : ""}" data-open="${esc(keyOf(i))}" aria-label="Open ${esc(i.name)} supply chain">
+        <div class="row1"><div><div class="nm">${esc(i.name)} <span class="tk">${esc(i.ticker)} · ${esc(themeName(i.theme))}</span></div>
+          ${top ? `<div class="trig">${esc([top.what, top.value].filter(Boolean).join(" · "))}</div>` : `<div class="muted small">No sourced backlog or contracts yet.</div>`}</div>
+          <div class="rt"><div class="${y == null ? "tk" : y >= 0 ? "pos" : "neg"}">${y == null ? "—" : "1Y " + pct(y)}</div></div></div>
+        <div class="cat">${(sc.inTalks || []).length ? (sc.inTalks.length + " in talks") : "No talks logged"} · ${(sc.customers || []).length} customers · ${(sc.suppliers || []).length} suppliers <span class="chev">›</span></div></button>`;
+    }).join("");
+    return `<h2>Supply chain</h2>
+      <p class="muted small">Signed contracts, talks, opportunity size and growth, only where a source is recorded. Share-price returns come from this build's market data. A dash or an empty section means we do not have a source, not that the figure is zero.</p>
+      ${chips("chainTheme", [["All", "All", vis(ranked).length], ...THEMES.map((x) => [x, themeName(x), vis(D.ideas).filter((i) => themeId(i.theme) === x).length])])}
+      <div class="cards">${cards || `<div class="card muted">No ideas match the current filters.</div>`}</div>`;
+  };
   V.Portfolio = portfolioMain;
   V.Brief = briefView;
   V.Analyst = analystView;
