@@ -100,10 +100,6 @@
   });
 
   // ---------- app constants ----------
-  const STOCK_THEMES = ["Defence", "AI supply chain", "Crypto", "Healthcare and pharma", "Banks and financials", "Energy", "Mining and commodities", "Consumer", "Industrials", "Utilities", "Property", "Telecoms"];
-  const DEFAULT_THEMES = ["Defence", "AI supply chain", "Crypto"];
-  let THEMES = DEFAULT_THEMES.slice();
-  let TM = null;
   const ACTIONS = ["Buy", "Accumulate on dips", "Watch", "Trim", "Avoid"];
   const FACTORS = [
     { key: "m", label: "Theme momentum / catalyst strength", short: "Mom", what: "Strength of the theme and news flow" },
@@ -118,10 +114,10 @@
   const STANCE_TONE = { Overweight: "success", Neutral: "neutral", Underweight: "warning" };
   const DIR_TONE = { Positive: "success", Negative: "danger", Mixed: "neutral", Pending: "neutral" };
   const IMPACT_TONE = { Positive: "success", Negative: "danger", Mixed: "neutral" };
-  const VIEWS = ["Brief", "Focus", "Scoreboard", "Themes", "Crypto", "Calendar", "Sources", "Supply chain", "Portfolio", "Analyst"];
+  const VIEWS = ["Brief", "Focus", "Supply chain", "Scoreboard", "Themes", "Crypto", "Calendar", "Sources", "Portfolio", "Analyst"];
   // keys 1-9 then 0 follow this order; on phones overflow views live under "More"
-  const TABS = [["Brief", "☀"], ["Focus", "◎"], ["Scoreboard", "≡"], ["Themes", "◇"], ["Crypto", "₿"], ["Calendar", "▦"], ["Sources", "↗"], ["Supply chain", "⧉"], ["Portfolio", "◔"], ["Analyst", "✦"], ["Settings", "⚙"]];
-  const OVERFLOW = ["Scoreboard", "Themes", "Crypto", "Calendar", "Sources", "Supply chain", "Settings"];
+  const TABS = [["Brief", "☀"], ["Focus", "◎"], ["Supply chain", "⇄"], ["Scoreboard", "≡"], ["Themes", "◇"], ["Crypto", "₿"], ["Calendar", "▦"], ["Sources", "↗"], ["Portfolio", "◔"], ["Analyst", "✦"], ["Settings", "⚙"]];
+  const OVERFLOW = ["Scoreboard", "Themes", "Crypto", "Calendar", "Sources", "Settings"];
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const RANGES = { "1M": 31, "3M": 92, "6M": 183, "1Y": 366 };
   const CHECK = { open: ["On open only", 0], "15m": ["Every 15 min", 15], "1h": ["Every hour", 60], "4h": ["Every 4 hours", 240] };
@@ -130,7 +126,7 @@
   const IDEA_VIEWS = ["Focus", "Scoreboard", "Themes", "Crypto", "Supply chain"];
   const isWide = () => matchMedia("(min-width: 900px)").matches;
   // global filters (theme, action, min score) apply to every idea list
-  const vis = (arr) => arr.filter((i) => themeOn(i.theme) && (st.fTheme === "All" || themeId(i.theme) === themeId(st.fTheme)) && (st.fAction === "All" || i.action === st.fAction) && score10(i) >= Number(st.fMin) * 10);
+  const vis = (arr) => arr.filter((i) => catVisible(i) && (st.fTheme === "All" || themeId(i.theme) === themeId(st.fTheme)) && (st.fAction === "All" || i.action === st.fAction) && score10(i) >= Number(st.fMin) * 10);
   const pill = (t, tone) => `<span class="pill t-${tone}">${esc(t)}</span>`;
   const score10 = (i) => Math.round(FACTORS.reduce((a, f) => a + i.s[f.key] * W[f.key], 0) / 10);
   const fmt = (t) => (t / 10).toFixed(1);
@@ -143,47 +139,75 @@
   }
   const mkt = (i) => (D.market && D.market.assets && D.market.assets[i.name]) || null;
   const keyOf = (i) => i.ticker + "|" + i.name;
-  function defaultThemeItems() {
-    const fromData = new Set((D && D.ideas || []).map((i) => i.theme).filter(Boolean));
-    return STOCK_THEMES.map((name) => ({ id: name, name, on: DEFAULT_THEMES.includes(name) || fromData.has(name), stock: true }));
+  // Themes. The catalogue (sectors → sub-themes, each with a thesis, sources and recommended ideas) lives in the
+  // encrypted payload (D.themeCatalog). The investor's selection is sealed on the device (vault record "themes", v2).
+  // Ideas keep their own dashboard theme (D.ideas[].theme) for stances and news; the catalogue maps ideas to sub-themes.
+  const STOCK_THEMES = ["Defence", "AI supply chain", "Crypto", "Healthcare and pharma", "Banks and financials", "Energy", "Mining and commodities", "Consumer", "Industrials", "Utilities", "Property", "Telecoms"];
+  const DEFAULT_THEMES = ["Defence", "AI supply chain", "Crypto"];
+  let THEMES = DEFAULT_THEMES.slice();
+  let TM = null;
+  let CATC = null, CATD = null, PC = null, PCK = null;
+  function catalog() {
+    const c = D && D.themeCatalog;
+    if (c && Array.isArray(c.sectors) && c.sectors.length) return c.sectors;
+    return [{ id: "ready", name: "Ready-made", themes: STOCK_THEMES.map((n) => ({ id: n, name: n, legacy: [n], ideas: [], picks: [], thesis: "" })) }];
   }
+  function catThemes() {
+    if (CATD === D && CATC) return CATC;
+    const out = [];
+    for (const s of catalog()) for (const t of s.themes || []) if (t && t.id) out.push({ ...t, legacy: t.legacy || [], ideas: t.ideas || [], picks: t.picks || [], sector: s.name, sectorId: s.id });
+    CATC = out; CATD = D; return out;
+  }
+  const catById = (id) => catThemes().find((t) => t.id === id) || null;
+  const legacyOn = (names) => catThemes().filter((t) => t.legacy.some((l) => names.includes(l))).map((t) => t.id);
   function themePrefs() {
-    const base = defaultThemeItems();
-    const extras = [];
-    if (TM && Array.isArray(TM.items)) {
-      const seen = new Set();
-      const out = [];
-      for (const it of TM.items) {
-        const id = String(it.id || it.name || "").trim(); if (!id || seen.has(id)) continue;
-        seen.add(id);
-        const stock = STOCK_THEMES.includes(id) || it.stock === true;
-        const name = String(it.name || id).trim() || id;
-        out.push({ id, name, on: it.on !== false, stock });
-      }
-      for (const b of base) if (!seen.has(b.id)) { seen.add(b.id); out.push(b); }
-      return { v: 1, items: out };
+    if (PC && PCK === TM && CATD === D) return PC;
+    const all = catThemes(), ids = new Set(all.map((t) => t.id));
+    let p;
+    if (TM && TM.v === 2) {
+      const sel = new Set();
+      for (const id of TM.sel || []) { if (ids.has(id)) sel.add(id); else if (STOCK_THEMES.includes(id)) legacyOn([id]).forEach((x) => sel.add(x)); }
+      p = { v: 2, sel: [...sel], names: { ...(TM.names || {}) }, custom: (TM.custom || []).filter((x) => x && x.id).map((x) => ({ id: String(x.id), name: String(x.name || x.id), on: x.on !== false })), legacyNames: { ...(TM.legacyNames || {}) }, keep: TM.sel || [] };
+    } else if (TM && Array.isArray(TM.items)) {
+      // v1 (12 ready-made themes + custom) → v2: each switched-on ready-made theme selects the catalogue themes that replace it
+      const on = TM.items.filter((x) => x && x.on !== false).map((x) => String(x.id || x.name));
+      const custom = TM.items.filter((x) => x && !STOCK_THEMES.includes(String(x.id || x.name)) && x.stock !== true).map((x) => ({ id: String(x.id || x.name), name: String(x.name || x.id), on: x.on !== false }));
+      const legacyNames = {}; for (const x of TM.items) if (x && STOCK_THEMES.includes(String(x.id)) && x.name && x.name !== x.id) legacyNames[x.id] = String(x.name);
+      p = { v: 2, sel: legacyOn(on), names: {}, custom, legacyNames, migrated: true };
+    } else {
+      const fromData = [...new Set(((D && D.ideas) || []).map((i) => i.theme).filter(Boolean))];
+      p = { v: 2, sel: legacyOn([...DEFAULT_THEMES, ...fromData]), names: {}, custom: [], legacyNames: {} };
     }
-    const seen = new Set(base.map((x) => x.id));
-    for (const i of (D && D.ideas) || []) if (i.theme && !seen.has(i.theme)) { seen.add(i.theme); extras.push({ id: i.theme, name: i.theme, on: true, stock: false }); }
-    return { v: 1, items: base.concat(extras) };
+    p.set = new Set(p.sel); PC = p; PCK = TM; return p;
   }
-  function themeItem(raw) {
-    const t = String(raw || "");
-    return themePrefs().items.find((x) => x.id === t || x.name === t) || null;
+  const selSet = () => themePrefs().set;
+  const catName = (t) => (t && (themePrefs().names[t.id] || t.name)) || "";
+  let IC = null, ICD = null;
+  function ideaCats(i) {
+    if (ICD !== D || !IC) { IC = new Map(); ICD = D; for (const t of catThemes()) for (const n of t.ideas) { if (!IC.has(n)) IC.set(n, []); IC.get(n).push(t.id); } }
+    return IC.get(i.name) || [];
   }
-  function themeId(raw) { const it = themeItem(raw); return it ? it.id : String(raw || ""); }
-  function themeName(raw) { const it = themeItem(raw); return it ? it.name : String(raw || ""); }
-  function themeOn(raw) { const it = themeItem(raw); return it ? !!it.on : true; }
+  // legacy (dashboard) theme on: any selected catalogue theme replaces it, or a custom theme of that name is on
+  function themeOn(raw) {
+    const t = String(raw || ""), p = themePrefs();
+    const c = p.custom.find((x) => x.id === t || x.name === t); if (c) return c.on;
+    const refs = catThemes().filter((x) => x.legacy.includes(t)); if (!refs.length) return true;
+    return refs.some((x) => p.set.has(x.id));
+  }
+  // an idea shows when one of its catalogue themes is selected (or, if no catalogue theme lists it, when its dashboard theme is on)
+  function catVisible(i) { const c = ideaCats(i); return c.length ? c.some((id) => selSet().has(id)) : themeOn(i.theme); }
+  function themeId(raw) { return String(raw || ""); }
+  function themeName(raw) { const t = String(raw || ""), p = themePrefs(); const c = p.custom.find((x) => x.id === t); return (c && c.name) || p.legacyNames[t] || t; }
   function themes() {
-    const prefs = themePrefs(), names = [];
-    for (const it of prefs.items) if (it.on) names.push(it.id);
-    const seen = new Set(prefs.items.map((x) => x.id));
-    for (const i of (D && D.ideas) || []) if (i.theme && !seen.has(i.theme)) { seen.add(i.theme); names.push(i.theme); }
-    return names;
+    const names = [], seen = new Set(), ideas = (D && D.ideas) || [];
+    const order = [...STOCK_THEMES, ...ideas.map((i) => i.theme)];
+    for (const t of order) if (t && !seen.has(t)) { seen.add(t); if (ideas.some((i) => i.theme === t && catVisible(i))) names.push(t); }
+    for (const c of themePrefs().custom) if (c.on && !seen.has(c.id)) { seen.add(c.id); names.push(c.id); }
+    return names.length ? names : DEFAULT_THEMES.filter((t) => ideas.some((i) => i.theme === t));
   }
   function themeIdx(raw) {
     const id = themeId(raw);
-    const pool = [...STOCK_THEMES, ...themePrefs().items.filter((x) => !STOCK_THEMES.includes(x.id)).map((x) => x.id)];
+    const pool = [...STOCK_THEMES, ...themePrefs().custom.map((x) => x.id)];
     let n = pool.indexOf(id); if (n < 0) n = THEMES.indexOf(id);
     return n < 0 ? 0 : n % 8;
   }
@@ -193,10 +217,21 @@
       || { stance: "Neutral", line: "No dashboard stance has been written for this theme yet.", flip: "—" };
   }
   function refreshThemes() {
-    THEMES = themes();
+    PC = null; THEMES = themes();
     if (st && THEMES.length && !THEMES.includes(themeId(st.theme))) st.theme = THEMES[0];
   }
-  const saveThemes = () => { if (!TM) TM = themePrefs(); return vaultSave("themes", TM); };
+  const saveThemes = () => { const p = themePrefs(); TM = { v: 2, sel: p.sel, names: p.names, custom: p.custom, legacyNames: p.legacyNames }; PC = null; return vaultSave("themes", TM); };
+  // recommended ideas for a catalogue theme: scored dashboard ideas first (by score), then researched picks
+  function themeRecs(t) {
+    const ideas = t.ideas.map((n) => D.ideas.find((i) => i.name === n)).filter(Boolean).sort(byScore).map((i) => ({ kind: "idea", i, key: keyOf(i), name: i.name }));
+    const picks = t.picks.filter((p) => p && p.name && !ideas.some((x) => x.name === p.name)).map((p) => ({ kind: "pick", p, key: "co:" + p.name, name: p.name }));
+    return ideas.concat(picks);
+  }
+  function themeScore(t) {
+    if (typeof t.score === "number") return t.score;
+    const xs = t.ideas.map((n) => D.ideas.find((i) => i.name === n)).filter(Boolean);
+    return xs.length ? xs.reduce((a, i) => a + score10(i), 0) / xs.length / 10 : null;
+  }
 
   // ---------- number formatting ----------
   const big = (v, cur = "$") => {
@@ -224,7 +259,7 @@
     const saved = sessionStorage.getItem("view");
     st = { view: saved || (VIEWS.includes(S.startView) ? S.startView : "Focus"), group: "All", action: "All", sort: "overall", cols: "Decision",
       theme: "Defence", chainTheme: "All", cal: "All", month: iso(base).slice(0, 7), detail: null, range: "6M", back: null,
-      q: "", fTheme: "All", fAction: "All", fMin: "0", showFilters: false, brief: null, briefQ: "" };
+      q: "", fTheme: "All", fAction: "All", fMin: "0", showFilters: false, brief: null, briefQ: "", scTag: "All", scMode: "Companies", secOpen: new Set(), catQ: "" };
     $("#lock").hidden = true; $("#app").hidden = false;
     $("#tabs").innerHTML = `<div class="navIn"><div class="brand"><img src="icons/icon-192.png" alt="" width="28" height="28"><span>Invest Intel</span></div>`
       + TABS.map(([v, ic], n) => `${v === "Portfolio" ? `<div class="navsep" aria-hidden="true"><span>You</span></div>` : ""}<button data-tab="${v}"${n < 10 ? ` aria-keyshortcuts="${(n + 1) % 10}"` : ""}${OVERFLOW.includes(v) ? ' class="ovf"' : ""}><span class="ic">${ic}</span><span class="tl">${v === "Supply chain" ? "Supply" : v}</span>${n < 10 ? `<kbd>${(n + 1) % 10}</kbd>` : ""}</button>`).join("")
@@ -237,7 +272,7 @@
     $("#filters").onchange = (e) => { const t = e.target.closest("select[data-f]"); if (t) { st[t.dataset.f] = t.value; renderFilters(); render(); } };
     let rt; window.onresize = () => { clearTimeout(rt); rt = setTimeout(() => { if (st.view === "Analyst" && document.activeElement && document.activeElement.id === "chatIn") sizeChat(); else render(); }, 150); };
     if (window.visualViewport) { visualViewport.addEventListener("resize", sizeChat); visualViewport.addEventListener("scroll", sizeChat); }
-    $("#view").addEventListener("input", onInput); $("#view").addEventListener("keydown", onViewKey); $("#view").addEventListener("submit", onSubmit);
+    $("#view").addEventListener("input", onInput); $("#view").addEventListener("toggle", (e) => { const d = e.target; if (d && d.dataset && d.dataset.sec) { if (d.open) st.secOpen.add(d.dataset.sec); else st.secOpen.delete(d.dataset.sec); } }, true); $("#view").addEventListener("keydown", onViewKey); $("#view").addEventListener("submit", onSubmit);
     $("#view").addEventListener("focusin", (e) => { if (e.target.id === "chatIn" && matchMedia("(pointer: coarse)").matches) { document.body.classList.add("kb"); sizeChat(); } });
     $("#view").addEventListener("focusout", (e) => { if (e.target.id === "chatIn") setTimeout(() => { document.body.classList.remove("kb"); sizeChat(); }, 60); });
     buildIndex(); openVault();
@@ -473,43 +508,109 @@
       || i.ticker.toLowerCase().split(/\s*\/\s*/).includes(q)
       || (D.match && D.match[i.name] && (D.match[i.name].aliases || []).some((a) => String(a).toLowerCase() === q))) || null;
   }
-  function partyList(arr) {
-    if (!arr || !arr.length) return `<div class="muted small">No sourced names yet.</div>`;
-    return `<div class="plist">${arr.map((p) => {
-      const hit = coveredIdea(p.name); const role = p.role ? `<span class="tk"> · ${esc(p.role)}</span>` : "";
-      return `<div class="pitem">${hit ? `<button class="lnk" data-open="${esc(keyOf(hit))}">${esc(p.name)}</button>` : `<span>${esc(p.name)}</span>`}${role}</div>`;
-    }).join("")}</div>`;
+  // ---------- supply chain (per company) ----------
+  // Sources: the idea's own supplyChain (from the dashboard) merged with D.chain.companies[name] (detailed, sourced overlay).
+  const REC_ACTIONS = ["Buy", "Accumulate on dips", "Watch"];
+  const ovOf = (name) => { const c = (D.chain && D.chain.companies) || {}; if (c[name]) return c[name]; const q = String(name || "").toLowerCase(); const k = Object.keys(c).find((x) => x.toLowerCase() === q || String(c[x].ticker || "").toLowerCase() === q); return k ? c[k] : null; };
+  const ovName = (name) => { const c = (D.chain && D.chain.companies) || {}; if (c[name]) return name; const q = String(name || "").toLowerCase(); return Object.keys(c).find((x) => x.toLowerCase() === q || String(c[x].ticker || "").toLowerCase() === q) || null; };
+  function pickOf(name) {
+    const q = String(name || "").toLowerCase(); let hit = null; const th = [];
+    for (const t of catThemes()) for (const p of t.picks) if (p && (String(p.name).toLowerCase() === q || String(p.ticker || "").toLowerCase() === q)) { if (!hit) hit = p; th.push(t.id); }
+    return hit ? { ...hit, themes: th } : null;
   }
+  // key for a counterparty name when the dashboard covers it (an idea, a researched company or a theme pick)
+  function coveredKey(name) {
+    const i = coveredIdea(name); if (i) return keyOf(i);
+    const o = ovName(name); if (o) return "co:" + o;
+    const p = pickOf(name); return p ? "co:" + p.name : null;
+  }
+  const CHAIN_KEYS = ["inTalks", "committed", "opportunity", "customers", "suppliers", "concentration"];
+  function chainOf(name, own) {
+    const ov = ovOf(name) || {}, base = own || {}, out = {};
+    for (const k of CHAIN_KEYS) {
+      const seen = new Set(), arr = [];
+      for (const it of [...(ov[k] || []), ...(base[k] || [])]) {
+        if (!it) continue; const sig = (String(it.who || it.what || it.name || it.note || "").toLowerCase().slice(0, 40) + "|" + String(it.value || "").toLowerCase());
+        if (seen.has(sig)) continue; seen.add(sig); arr.push(it);
+      }
+      out[k] = arr;
+    }
+    out.revenue = ov.revenue || null; out.analysis = ov.analysis || null; out.themes = ov.themes || []; out.ticker = ov.ticker || ""; out.listing = ov.listing || "";
+    return out;
+  }
+  const NOSRC = `<div class="muted small nosrc">No source yet</div>`;
   function srcLine(it) {
     if (!it || (!it.source && !it.url)) return "";
     const label = it.source || "Source";
     return it.url ? `<a href="${esc(it.url)}" target="_blank" rel="noopener noreferrer">${esc(label)} ↗</a>` : esc(label);
   }
-  function chainRows(items, kind) {
-    if (!items || !items.length) return `<div class="muted small">No sourced ${esc(kind)} yet.</div>`;
-    return `<div class="clist">${items.map((it) => {
-      const title = it.who || it.what || it.counterparty || "—";
-      const bits = [it.who && it.what ? it.what : "", it.value, it.length, it.horizon, it.date, it.counterparty && it.who !== it.counterparty ? it.counterparty : ""].filter(Boolean);
-      return `<div class="citem"><div class="ct">${esc(title)}</div>${bits.length ? `<div class="cdet">${esc(bits.join(" · "))}</div>` : ""}${it.source || it.url ? `<div class="tk">${srcLine(it)}</div>` : ""}</div>`;
+  function partyList(arr) {
+    if (!arr || !arr.length) return NOSRC;
+    return `<div class="plist">${arr.map((p) => {
+      const k = coveredKey(p.name); const role = p.role ? `<span class="tk"> · ${esc(p.role)}</span>` : "";
+      const src = p.source || p.url ? `<div class="tk psrc">${srcLine(p)}${p.date ? " · " + esc(p.date) : ""}</div>` : "";
+      return `<div class="pitem">${k ? `<button class="lnk" data-open="${esc(k)}">${esc(p.name)} ›</button>` : `<span>${esc(p.name)}</span>`}${role}${src}</div>`;
     }).join("")}</div>`;
   }
-  function growthBlock(i) {
+  function chainRows(items) {
+    if (!items || !items.length) return NOSRC;
+    return `<div class="clist">${items.map((it) => {
+      const title = it.who || it.what || it.counterparty || "—";
+      const ck = it.counterparty ? coveredKey(it.counterparty) : null;
+      const bits = [it.who && it.what ? it.what : "", it.value, it.length, it.horizon].filter(Boolean);
+      const cp = it.counterparty && it.who !== it.counterparty ? (ck ? `<button class="lnk" data-open="${esc(ck)}">${esc(it.counterparty)} ›</button>` : esc(it.counterparty)) : "";
+      return `<div class="citem"><div class="ct">${esc(title)}</div>${bits.length ? `<div class="cdet">${esc(bits.join(" · "))}</div>` : ""}${cp ? `<div class="cdet">With ${cp}</div>` : ""}
+        ${it.source || it.url || it.date ? `<div class="tk">${srcLine(it)}${it.date ? `${it.source || it.url ? " · " : ""}${esc(it.date)}` : ""}</div>` : ""}</div>`;
+    }).join("")}</div>`;
+  }
+  function noteRows(items) {
+    if (!items || !items.length) return NOSRC;
+    return `<div class="clist">${items.map((it) => `<div class="citem"><div class="cdet">${esc(it.note || it.what || "")}</div>${it.source || it.url ? `<div class="tk">${srcLine(it)}${it.date ? " · " + esc(it.date) : ""}</div>` : ""}</div>`).join("")}</div>`;
+  }
+  function growthBlock(i, rev) {
     const m = mkt(i);
     const cells = [["1M", chgOver(m, RANGES["1M"])], ["6M", chgOver(m, RANGES["6M"])], ["1Y", chgOver(m, RANGES["1Y"])], ["YTD", chgYtd(m)]];
     const rg = revGrowth(m);
     return `<div class="ggrid">${cells.map(([l, v]) => `<div class="gcell"><div class="kl">${l}</div><div class="${v == null ? "tk" : v >= 0 ? "pos" : "neg"}">${v == null ? "—" : pct(v)}</div></div>`).join("")}
-      <div class="gcell wide"><div class="kl">Revenue growth</div><div class="${!rg ? "tk" : rg.pct >= 0 ? "pos" : "neg"}">${rg ? `${pct(rg.pct)}${rg.from && rg.to ? ` <span class="tk">${esc(rg.from)} → ${esc(rg.to)}</span>` : ""}` : "—"}</div></div></div>
-      ${m && m.price && m.price.source ? `<div class="tk">Share-price returns from ${esc(m.price.source)}, last close ${esc(dLabel(m.price.asOf || ""))}. Revenue growth is the latest annual period versus the one before, where statement data is available. A dash means no source, not zero.</div>` : `<div class="tk">Price or statement data is not available from the free sources this build uses.</div>`}`;
+      <div class="gcell wide"><div class="kl">Revenue growth (annual)</div><div class="${!rg ? "tk" : rg.pct >= 0 ? "pos" : "neg"}">${rg ? `${pct(rg.pct)}${rg.from && rg.to ? ` <span class="tk">${esc(rg.from)} → ${esc(rg.to)}</span>` : ""}` : "—"}</div></div>
+      ${rev ? `<div class="gcell wide"><div class="kl">Latest reported revenue growth</div><div>${esc(rev.value)} <span class="tk">${esc(rev.period || "")}</span></div><div class="tk">${srcLine(rev)}${rev.date ? " · " + esc(rev.date) : ""}</div></div>` : ""}</div>
+      ${m && m.price && m.price.source ? `<div class="tk">Share-price returns from ${esc(m.price.source)}, last close ${esc(dLabel(m.price.asOf || ""))}. Annual revenue growth is the latest fiscal year against the one before, where statement data is available. A dash means no source, not zero.</div>` : `<div class="tk">No share-price source yet for this company in this build.</div>`}`;
+  }
+  // which covered companies supply or buy from each other
+  let EDGEC = null, EDGED = null;
+  function chainEdges() {
+    if (EDGED === D && EDGEC) return EDGEC;
+    const ents = [...D.ideas.map((i) => ({ key: keyOf(i), name: i.name, sc: i.supplyChain })), ...Object.keys((D.chain && D.chain.companies) || {}).filter((n) => !D.ideas.some((i) => i.name === n)).map((n) => ({ key: "co:" + n, name: n, sc: null }))];
+    const m = new Map();
+    const add = (from, to, role, it) => { if (!from || !to || from === to) return; const k = from + ">" + to; if (!m.has(k)) m.set(k, { from, to, role, src: it }); };
+    for (const e of ents) { const c = chainOf(e.name, e.sc);
+      for (const p of c.customers) add(e.key, coveredKey(p.name), p.role, p);
+      for (const p of c.suppliers) add(coveredKey(p.name), e.key, p.role, p);
+      for (const it of c.committed) if (it.counterparty) add(e.key, coveredKey(it.counterparty), it.what, it); }
+    EDGEC = [...m.values()]; EDGED = D; return EDGEC;
+  }
+  const keyName = (k) => { if (!k) return ""; if (k.startsWith("co:")) return k.slice(3); const i = D.ideas.find((x) => keyOf(x) === k); return i ? i.name : k; };
+  function linksFor(key) {
+    const E = chainEdges(), sup = E.filter((e) => e.to === key), buy = E.filter((e) => e.from === key);
+    if (!sup.length && !buy.length) return `<div class="muted small">No links to other covered companies yet.</div>`;
+    const row = (k, role, dir) => `<div class="pitem"><span class="tk">${dir}</span> <button class="lnk" data-open="${esc(k)}">${esc(keyName(k))} ›</button>${role ? `<span class="tk"> · ${esc(role)}</span>` : ""}</div>`;
+    return `<div class="plist">${sup.map((e) => row(e.from, e.role, "Supplied by")).join("")}${buy.map((e) => row(e.to, e.role, "Sells to")).join("")}</div>`;
+  }
+  function chainBody(ent) {
+    const c = ent.chain;
+    return `<div class="slbl">What this means for the stock</div>${c.analysis ? `<div class="cana">${esc(c.analysis.text)}</div><div class="tk">New Bot analysis based on the sources below${c.analysis.date ? ", " + esc(c.analysis.date) : ""}. Research, not advice.</div>` : NOSRC}
+      <div class="slbl">Stock and revenue growth</div>${growthBlock({ name: ent.name }, c.revenue)}
+      <div class="slbl">In talks</div>${chainRows(c.inTalks)}
+      <div class="slbl">Committed: deals, contracts and backlog</div>${chainRows(c.committed)}
+      <div class="slbl">Opportunity size</div>${chainRows(c.opportunity)}
+      <div class="slbl">Key customers</div>${partyList(c.customers)}
+      <div class="slbl">Key suppliers</div>${partyList(c.suppliers)}
+      <div class="slbl">Concentration and risk</div>${noteRows(c.concentration)}
+      <div class="slbl">Links to other covered companies</div>${linksFor(ent.key)}`;
   }
   function chainSection(i) {
-    const sc = i.supplyChain || {};
-    return `<h3>Supply chain</h3><div class="card schain">
-      <div class="slbl">In talks</div>${chainRows(sc.inTalks, "talks")}
-      <div class="slbl">Committed</div>${chainRows(sc.committed, "contracts, backlog or orders")}
-      <div class="slbl">Opportunity size</div>${chainRows(sc.opportunity, "opportunity estimates")}
-      <div class="slbl">Growth</div>${growthBlock(i)}
-      <div class="slbl">Customers</div>${partyList(sc.customers)}
-      <div class="slbl">Suppliers</div>${partyList(sc.suppliers)}</div>`;
+    return `<h3>Supply chain and customers</h3><div class="card schain">${chainBody(entOf(keyOf(i)))}
+      <div class="mt6"><button class="btn sm" data-act="toChain" data-k="${esc(keyOf(i))}">⇄ Open in the Supply chain tab</button></div></div>`;
   }
   function detail(i) {
     const m = mkt(i) || {}; const p = m.price, f = m.financials, s = m.stats, c = m.crypto;
@@ -1356,7 +1457,7 @@ Rules:
   // =====================================================================================
   // Portfolio view
   // =====================================================================================
-  const EXP_TONE = (k) => ACTION_TONE[k] || (themeItem(k) || (D && D.ideas && D.ideas.some((i) => i.theme === k)) ? "accent" : "neutral");
+  const EXP_TONE = (k) => ACTION_TONE[k] || ((D && D.ideas && D.ideas.some((i) => i.theme === k)) ? "accent" : "neutral");
   function expBars(rows, kind) {
     if (!rows.length) return `<div class="muted small">No priced holdings yet.</div>`;
     return `<div class="xbars">${rows.map((r) => `<div class="xb"><div class="xl">${kind === "action" && ACTION_TONE[r.k] ? pill(r.k, ACTION_TONE[r.k]) : `<span class="xn">${kind === "theme" ? `<i class="l${themeIdx(r.k)}"></i>` : ""}${esc(kind === "theme" ? themeName(r.k) : r.k)}</span>`}</div>
@@ -1522,6 +1623,7 @@ How to answer:
 - End with one short line noting this is analysis, not regulated financial advice.`;
     if (AU.ctxDash) {
       const ctx = { asOf: D.asOf, scoring: { weightsPct: Object.fromEntries(FACTORS.map((f) => [f.short, W[f.key]])), factorMeanings: Object.fromEntries(FACTORS.map((f) => [f.short, f.what])) },
+        investorThemes: catThemes().filter((t) => selSet().has(t.id)).map((t) => ({ theme: catName(t), sector: t.sector, thesis: t.thesis, themeScore: themeScore(t), recommendations: themeRecs(t).slice(0, 4).map((r) => r.kind === "idea" ? { name: r.i.name, score: score10(r.i), action: r.i.action } : { name: r.p.name, ticker: r.p.ticker, rating: (r.p.rating || "Watch") + " (unscored)", why: r.p.why }) })).concat(themePrefs().custom.filter((c) => c.on).map((c) => ({ theme: c.name, custom: true }))),
         themeStances: D.themeStances, ideas: ranked.map((i) => ideaCtx(i, focus && keyOf(i) === keyOf(focus))),
         whatChanged: D.changes, catalysts: D.catalysts.map((c) => ({ date: c.date, event: c.event, type: c.type, why: c.why })),
         cryptoRegulation: D.cryptoRegs, marketBackdrop: D.marketBackdrop, notes: D.notes,
@@ -1807,6 +1909,7 @@ How to answer:
   }
   const autoGrow = (t) => { t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 160) + "px"; };
   function onInput(e) {
+    if (e.target.id === "catQ") { st.catQ = e.target.value; filterCat(); return; }
     if (e.target.id === "briefQ") { st.briefQ = e.target.value; const l = $(".brl"); if (l) l.innerHTML = briefList(); return; }
     if (e.target.id === "chatIn") { AU.draft = e.target.value; autoGrow(e.target); const b = $(".sendb:not(.stop)"); if (b) b.disabled = !AU.draft.trim(); }
   }
@@ -1831,9 +1934,10 @@ How to answer:
       }
       if (k === "themeAdd") {
         const name = (f.name.value || "").trim(); if (!name) throw new Error("Enter a theme name.");
-        TM = themePrefs();
-        if (TM.items.some((x) => x.id.toLowerCase() === name.toLowerCase() || x.name.toLowerCase() === name.toLowerCase())) throw new Error("That theme is already on the list.");
-        TM.items.push({ id: name, name, on: true, stock: false }); await saveThemes(); refreshThemes(); render(); toast("Theme added"); return;
+        if (!VS.ready || !canEnc()) throw new Error("Unlock the on-device vault to change themes.");
+        const p = themePrefs(), lc = name.toLowerCase();
+        if (p.custom.some((x) => x.name.toLowerCase() === lc) || catThemes().some((t) => catName(t).toLowerCase() === lc || t.name.toLowerCase() === lc)) throw new Error("That theme is already on the list. Search for it above.");
+        await applyThemeEdit((tm) => { tm.custom.push({ id: "c:" + Date.now().toString(36), name: name.slice(0, 40), on: true }); }); toast("Theme added"); return;
       }
       if (k === "ai") {
         const pvId = curCfg().provider, model = f.model.value === "__custom" ? f.custom.value.trim() : f.model.value, key = cleanKey(f.key.value);
@@ -2295,7 +2399,7 @@ Reply with ONLY this JSON, no prose, no code fences:
       <div class="btitle">${esc(b.title)}</div><h1 class="bhl">${esc(b.headline)}</h1>
       <div class="bacts"><button class="btn primary" data-act="brDiscuss" data-d="${esc(b.date)}"><span aria-hidden="true">✦</span> Discuss with analyst</button>
         <span class="bnav"><button class="iconBtn" data-act="brOpen" data-d="${older ? esc(older.date) : ""}"${older ? "" : " disabled"} aria-label="Older brief" title="Older ( [ )">‹</button><button class="iconBtn" data-act="brOpen" data-d="${newer ? esc(newer.date) : ""}"${newer ? "" : " disabled"} aria-label="Newer brief" title="Newer ( ] )">›</button></span></div>${chipHtml}</header>`;
-    const main = `<article class="brmain">${head}${briefHoldings(b)}<div class="card brbody"><div class="md brmd">${md(b.md)}</div></div>
+    const main = `<article class="brmain">${head}${briefHoldings(b)}${yourThemes(true)}<div class="card brbody"><div class="md brmd">${md(b.md)}</div></div>
       <div class="note mt12"><b>Research, not regulated financial advice.</b> Names in blue open the idea; links open the source in a new tab.</div></article>`;
     const list = `<aside class="brlist"><div class="brlh"><h3>Past briefs <span class="tk">(${B.length})</span></h3></div><input id="briefQ" type="search" placeholder="Search briefs" aria-label="Search past briefs" value="${esc(st.briefQ || "")}" autocomplete="off"><div class="card brl" role="list">${briefList()}</div></aside>`;
     return `<div class="brgrid">${main}${list}</div>`;
@@ -2322,34 +2426,148 @@ Reply with ONLY this JSON, no prose, no code fences:
   }
   async function applyThemeEdit(mut) {
     if (!VS.ready || !canEnc()) { toast("Unlock the on-device vault to change themes", "bad"); return; }
-    TM = themePrefs(); mut(TM); await saveThemes(); refreshThemes(); render();
+    const p = themePrefs();
+    const next = { v: 2, sel: [...p.sel], names: { ...p.names }, custom: p.custom.map((x) => ({ ...x })), legacyNames: { ...p.legacyNames } };
+    mut(next); TM = next; PC = null; await saveThemes(); refreshThemes(); render();
   }
+  const defaultSel = () => legacyOn([...DEFAULT_THEMES, ...new Set(D.ideas.map((i) => i.theme))]);
   Object.assign(EXTRA_ACTS, {
-    themeToggle: (b) => applyThemeEdit((tm) => { const it = tm.items.find((x) => x.id === b.dataset.id); const box = b.matches && b.matches("input") ? b : b.querySelector && b.querySelector("input"); if (it) it.on = box ? !!box.checked : !it.on; }),
-    themeDel: (b) => { if (!confirm("Remove this custom theme from this device?")) return; applyThemeEdit((tm) => { tm.items = tm.items.filter((x) => x.id !== b.dataset.id); }); },
+    catToggle: (b) => { const box = b.matches && b.matches("input") ? b : b.querySelector && b.querySelector("input"); const id = b.dataset.id;
+      applyThemeEdit((tm) => { const on = box ? !!box.checked : !tm.sel.includes(id); tm.sel = tm.sel.filter((x) => x !== id); if (on) tm.sel.push(id); }); },
+    catSec: (b) => { const sec = catalog().find((s) => s.id === b.dataset.id); if (!sec) return; const ids = (sec.themes || []).map((t) => t.id);
+      applyThemeEdit((tm) => { tm.sel = tm.sel.filter((x) => !ids.includes(x)); if (b.dataset.val === "all") tm.sel.push(...ids); }); },
+    catRename: (b) => { const t = catById(b.dataset.id); if (!t) return; const v = prompt(`Rename “${catName(t)}” (leave empty to reset)`, catName(t)); if (v == null) return;
+      applyThemeEdit((tm) => { const n = v.trim().slice(0, 40); if (!n || n === t.name) delete tm.names[t.id]; else tm.names[t.id] = n; }); },
+    catReset: () => { if (!confirm("Reset theme choices to the default (defence, AI supply chain and crypto themes)? Custom themes are kept.")) return; applyThemeEdit((tm) => { tm.sel = defaultSel(); tm.names = {}; }); },
+    themeToggle: (b) => applyThemeEdit((tm) => { const it = tm.custom.find((x) => x.id === b.dataset.id); const box = b.matches && b.matches("input") ? b : b.querySelector && b.querySelector("input"); if (it) it.on = box ? !!box.checked : !it.on; }),
+    themeDel: (b) => { if (!confirm("Remove this custom theme from this device?")) return; applyThemeEdit((tm) => { tm.custom = tm.custom.filter((x) => x.id !== b.dataset.id); }); },
+    toChain: (b) => { const k = b.dataset.k; st.view = "Supply chain"; sessionStorage.setItem("view", st.view); st.scTag = "All"; st.chainTheme = "All"; openDetail(k); scrollTo(0, 0); },
+    openIdea: (b) => { const k = b.dataset.k; st.view = "Scoreboard"; sessionStorage.setItem("view", st.view); openDetail(k); scrollTo(0, 0); },
   });
   function extraChange(e) {
     if (e.target.name === "model" && e.target.closest("form[data-form=ai]")) { const c = e.target.closest("form").querySelector("[data-custom]"); AU.showCustom = e.target.value === "__custom"; c.classList.toggle("hide", !AU.showCustom); return true; }
+    if (e.target.dataset.cat) { const id = e.target.dataset.cat, on = e.target.checked; applyThemeEdit((tm) => { tm.sel = tm.sel.filter((x) => x !== id); if (on) tm.sel.push(id); }); return true; }
     if (e.target.dataset.thName) {
       const id = e.target.dataset.thName, name = e.target.value.trim();
       if (!name) return true;
-      applyThemeEdit((tm) => { const it = tm.items.find((x) => x.id === id); if (it) it.name = name; });
+      applyThemeEdit((tm) => { const it = tm.custom.find((x) => x.id === id); if (it) it.name = name.slice(0, 40); });
       return true;
     }
     return false;
   }
+  // a pick or idea chip: score for scored ideas, rating for researched picks
+  function recChip(r) {
+    if (r.kind === "idea") return `<button class="rchip" data-open="${esc(r.key)}"><b>${esc(r.i.name)}</b><span class="rs">${fmt(score10(r.i))}</span>${pill(r.i.action, ACTION_TONE[r.i.action])}</button>`;
+    return `<button class="rchip" data-open="${esc(r.key)}" title="${esc(r.p.why || "")}"><b>${esc(r.p.name)}</b><span class="tk">${esc(r.p.ticker || "")}</span>${pill(r.p.rating || "Watch", ACTION_TONE[r.p.rating] || "neutral")}<span class="tk">unscored</span></button>`;
+  }
+  const scorePill = (t) => { const v = themeScore(t); return v == null ? `<span class="tsc none" title="No scored ideas in this theme yet">Not scored</span>` : `<span class="tsc" title="Average overall score of this theme's dashboard ideas">${v.toFixed(1)}</span>`; };
+  function themeRow(t, on) {
+    const recs = themeRecs(t).slice(0, 4), src = t.source;
+    const s = [t.name, catName(t), t.sector, t.thesis, ...t.picks.map((p) => p.name + " " + (p.ticker || "")), ...t.ideas].join(" ").toLowerCase();
+    return `<div class="crow${on ? " on" : ""}" data-s="${esc(s)}">
+      <div class="crh"><label class="ctog"><input type="checkbox" data-cat="${esc(t.id)}"${on ? " checked" : ""} aria-label="Select ${esc(catName(t))}"><b>${esc(catName(t))}</b></label>${scorePill(t)}
+        <button class="iconBtn sm" type="button" data-act="catRename" data-id="${esc(t.id)}" aria-label="Rename ${esc(catName(t))}" title="Rename">✎</button></div>
+      ${t.thesis ? `<div class="cth">${esc(t.thesis)}${src && src.url ? ` <a href="${esc(src.url)}" target="_blank" rel="noopener noreferrer" class="tk">${esc(src.date || "Source")} ↗</a>` : ""}</div>` : ""}
+      <div class="rchips">${recs.length ? recs.map(recChip).join("") : `<span class="muted small">No researched picks yet.</span>`}</div></div>`;
+  }
+  function filterCat() {
+    const q = (st.catQ || "").trim().toLowerCase(), ws = q.split(/\s+/).filter(Boolean);
+    document.querySelectorAll(".csec").forEach((d) => { let n = 0; d.querySelectorAll(".crow").forEach((r) => { const ok = ws.every((w) => r.dataset.s.includes(w)); r.hidden = !ok; if (ok) n++; });
+      d.hidden = !!q && !n; if (q && n) d.open = true; else if (!q) d.open = st.secOpen.has(d.dataset.sec); });
+  }
   function themeSettings() {
-    const items = themePrefs().items;
-    const rows = items.map((it) => `<div class="trow">
-      <label class="tog sm" data-act="themeToggle" data-id="${esc(it.id)}"><input type="checkbox"${it.on ? " checked" : ""}><span class="tk">${it.stock ? "Ready-made" : "Custom"}</span></label>
+    const p = themePrefs(), secs = catalog(), all = catThemes(), nSel = all.filter((t) => p.set.has(t.id)).length;
+    const nPicks = all.filter((t) => themeRecs(t).length).length;
+    const groups = secs.map((sec) => {
+      const ts = (sec.themes || []).map((t) => all.find((x) => x.id === t.id)).filter(Boolean), n = ts.filter((t) => p.set.has(t.id)).length;
+      const open = st.secOpen.has(sec.id);
+      return `<details class="csec" data-sec="${esc(sec.id)}"${open ? " open" : ""}><summary><span class="csn">${esc(sec.name)}</span><span class="tk">${n} of ${ts.length} selected</span><span class="chev">›</span></summary>
+        <div class="csa"><button class="btn sm" type="button" data-act="catSec" data-id="${esc(sec.id)}" data-val="all">Select all</button><button class="btn sm" type="button" data-act="catSec" data-id="${esc(sec.id)}" data-val="none">Clear</button></div>
+        ${ts.map((t) => themeRow(t, p.set.has(t.id))).join("")}</details>`;
+    }).join("");
+    const custom = p.custom.map((it) => `<div class="trow">
+      <label class="tog sm" data-act="themeToggle" data-id="${esc(it.id)}"><input type="checkbox"${it.on ? " checked" : ""}><span class="tk">Custom</span></label>
       <input class="tname" data-th-name="${esc(it.id)}" value="${esc(it.name)}" aria-label="Theme name" spellcheck="false">
-      ${it.stock ? `<span class="tk stockn">${esc(it.id !== it.name ? it.id : "")}</span>` : `<button class="btn sm dangerT" type="button" data-act="themeDel" data-id="${esc(it.id)}" aria-label="Remove ${esc(it.name)}">Remove</button>`}
-    </div>`).join("");
+      <button class="btn sm dangerT" type="button" data-act="themeDel" data-id="${esc(it.id)}" aria-label="Remove ${esc(it.name)}">Remove</button></div>`).join("");
     return `<div class="card">
-      <p class="muted small">Switch themes on or off, rename them, or add your own. Choices are encrypted on this device with your passcode, like holdings. Filters, Focus and the score summaries follow the themes you switch on. Ideas with a theme that is not on this list still appear under their own name.</p>
-      ${rows}
+      <p class="muted small">Pick the sectors, themes and regions you want to invest in. ${all.length} themes in ${secs.length} groups; ${nPicks} have researched picks. Each shows a one-line thesis with its source, a theme score (the average overall score of its dashboard ideas) and up to four recommendations: scored ideas first, then researched picks that are not yet scored. Choices are encrypted on this device. Focus, Scoreboard, Supply chain, the Brief and the analyst follow what you select.</p>
+      <div class="srow"><input id="catQ" type="search" placeholder="Search themes, sectors or companies" aria-label="Search themes" autocomplete="off" value="${esc(st.catQ || "")}"><span class="tk" id="catN">${nSel} selected</span><button class="btn sm" type="button" data-act="catReset">Reset</button></div>
+      <div class="csecs">${groups}</div>
+      <div class="slbl mt12">Your own themes</div>${custom || `<div class="muted small">None yet. Add one below; ask New Bot in chat to research picks for it.</div>`}
       <form class="srow mt12" data-form="themeAdd"><input name="name" placeholder="New theme name" aria-label="New theme name" required maxlength="40"><button class="btn primary" type="submit">Add theme</button></form>
     </div>`;
+  }
+  // selected catalogue themes, grouped by sector (Themes view) or compact (Brief)
+  function yourThemes(compact) {
+    const p = themePrefs(), sel = catThemes().filter((t) => p.set.has(t.id)), cust = p.custom.filter((c) => c.on);
+    if (!sel.length && !cust.length) return `<div class="card muted">No themes selected. Choose some in <button class="lnk" data-goto="Settings">Settings › Themes</button>.</div>`;
+    if (compact) {
+      const rows = [...sel].sort((a, b) => (themeScore(b) ?? -1) - (themeScore(a) ?? -1)).slice(0, 8).map((t) => { const r = themeRecs(t)[0];
+        return `<div class="ytr"><span class="ytn">${esc(catName(t))}</span>${scorePill(t)}${r ? recChip(r) : `<span class="muted small">No researched picks yet</span>`}</div>`; }).join("");
+      return `<section class="card ythem"><div class="bhh"><div class="kl">Your themes</div><span class="tk">${sel.length} selected · top pick each</span></div>${rows}
+        <div class="mt6"><button class="btn sm" data-goto="Themes">All your themes ›</button> <button class="btn sm" data-goto="Settings">Change themes</button></div></section>`;
+    }
+    const bySec = new Map(); for (const t of sel) { if (!bySec.has(t.sector)) bySec.set(t.sector, []); bySec.get(t.sector).push(t); }
+    return [...bySec.entries()].map(([sec, ts]) => `<h3>${esc(sec)}</h3><div class="ycards">${ts.map((t) => `<div class="card ycard"><div class="row1"><b>${esc(catName(t))}</b>${scorePill(t)}</div>
+      ${t.thesis ? `<div class="cth">${esc(t.thesis)}</div>` : ""}${t.source && t.source.url ? `<div class="tk"><a href="${esc(t.source.url)}" target="_blank" rel="noopener noreferrer">${esc(t.source.title || "Source")} ↗</a>${t.source.date ? " · " + esc(t.source.date) : ""}</div>` : ""}
+      <div class="rchips">${themeRecs(t).slice(0, 4).map(recChip).join("") || `<span class="muted small">No researched picks yet.</span>`}</div></div>`).join("")}</div>`).join("")
+      + (cust.length ? `<h3>Your own themes</h3><div class="ycards">${cust.map((c) => `<div class="card ycard"><b>${esc(c.name)}</b><div class="muted small">No researched picks yet. Ask New Bot in chat to research this theme and it will appear here with sourced picks.</div></div>`).join("")}</div>` : "");
+  }
+
+  // ---------- Supply chain tab ----------
+  function ownedInfo() {
+    const names = new Set(), extra = [];
+    for (const n of (D.chain && D.chain.knownHoldings) || []) names.add(n);
+    if (P && VS.ready) for (const h of P.holdings) { const mt = matchIdea(h); if (mt) names.add(mt.i.name); else { const nm = String(h.name || h.sym || "").trim(); if (nm) { const o = ovName(nm) || ovName(h.sym) || (pickOf(nm) || pickOf(h.sym) || {}).name; if (o) names.add(o); else if (!extra.some((x) => x.name === nm)) extra.push({ name: nm, sym: h.sym || "" }); } } }
+    return { names, extra };
+  }
+  function entOf(k) {
+    if (!k) return null;
+    const own = ownedInfo();
+    if (!k.startsWith("co:")) { const i = D.ideas.find((x) => keyOf(x) === k); if (!i) return null;
+      return { key: k, kind: "idea", i, name: i.name, ticker: i.ticker, listing: i.listing, chain: chainOf(i.name, i.supplyChain), rec: REC_ACTIONS.includes(i.action), own: own.names.has(i.name), cats: ideaCats(i) }; }
+    const name = k.slice(3), ov = ovOf(name), pk = pickOf(name), ex = own.extra.find((x) => x.name === name);
+    if (!ov && !pk && !ex) return null;
+    const ch = chainOf(name, null);
+    return { key: k, kind: "co", name, ticker: ch.ticker || (pk && pk.ticker) || (ex && ex.sym) || "", listing: ch.listing, chain: ch, pick: pk, rec: !!pk && REC_ACTIONS.includes(pk.rating || "Watch"), own: own.names.has(name) || !!ex, holding: !!ex, cats: [...new Set([...(ch.themes || []), ...((pk && pk.themes) || [])])] };
+  }
+  function chainCos() {
+    const own = ownedInfo(), out = [], seen = new Set(), sel = selSet();
+    const push = (e) => { if (e && !seen.has(e.key)) { seen.add(e.key); out.push(e); } };
+    for (const i of ranked) if (catVisible(i) || own.names.has(i.name)) push(entOf(keyOf(i)));
+    for (const n of Object.keys((D.chain && D.chain.companies) || {})) if (!D.ideas.some((i) => i.name === n)) { const e = entOf("co:" + n); if (e && (e.own || !e.cats.length || e.cats.some((c) => sel.has(c)))) push(e); }
+    for (const x of own.extra) push(entOf("co:" + x.name));
+    return out;
+  }
+  const tagPills = (e) => `${e.rec ? `<span class="tag rec">Recommended</span>` : ""}${e.own ? `<span class="tag own">You own</span>` : ""}${!e.rec && !e.own ? `<span class="tag cov">Covered</span>` : ""}`;
+  function chainCard(e) {
+    const c = e.chain, top = c.committed[0], y = chgOver(mkt({ name: e.name }), RANGES["1Y"]);
+    const links = chainEdges().filter((x) => x.from === e.key || x.to === e.key).map((x) => keyName(x.from === e.key ? x.to : x.from));
+    const n = (a) => a.length;
+    return `<button class="card idea schcard${st.detail === e.key ? " sel" : ""}" data-open="${esc(e.key)}" aria-label="Open ${esc(e.name)} supply chain">
+      <div class="row1"><div><div class="nm">${esc(e.name)} <span class="tk">${esc(e.ticker || "")}</span></div><div class="tags">${tagPills(e)}${e.kind === "idea" ? `<span class="tk">${esc(e.i.action)} · ${fmt(score10(e.i))}</span>` : e.pick ? `<span class="tk">${esc(e.pick.rating || "Watch")} · unscored</span>` : ""}</div></div>
+        <div class="rt"><div class="${y == null ? "tk" : y >= 0 ? "pos" : "neg"}">${y == null ? "1Y —" : "1Y " + pct(y)}</div></div></div>
+      ${top ? `<div class="trig">${esc([top.what, top.value].filter(Boolean).join(": "))}</div>` : `<div class="muted small">No source yet for contracts or backlog.</div>`}
+      <div class="cat">${n(c.inTalks)} in talks · ${n(c.committed)} committed · ${n(c.customers)} customers · ${n(c.suppliers)} suppliers${links.length ? ` · linked to ${esc([...new Set(links)].slice(0, 3).join(", "))}${links.length > 3 ? "…" : ""}` : ""} <span class="chev">›</span></div></button>`;
+  }
+  function chainDiagram(E) {
+    const keys = [...new Set(E.flatMap((e) => [e.from, e.to]))]; if (keys.length < 2) return "";
+    const Wd = 360, H = 300, cx = Wd / 2, cy = H / 2, r = 112;
+    const pos = new Map(keys.map((k, n) => { const a = -Math.PI / 2 + n * 2 * Math.PI / keys.length; return [k, [cx + r * Math.cos(a), cy + r * Math.sin(a)]]; }));
+    const lines = E.map((e) => { const [x1, y1] = pos.get(e.from), [x2, y2] = pos.get(e.to); const dx = x2 - x1, dy = y2 - y1, L = Math.hypot(dx, dy) || 1, sh = 14;
+      return `<line class="ce" x1="${(x1 + dx / L * sh).toFixed(1)}" y1="${(y1 + dy / L * sh).toFixed(1)}" x2="${(x2 - dx / L * sh).toFixed(1)}" y2="${(y2 - dy / L * sh).toFixed(1)}" marker-end="url(#arr)"/>`; }).join("");
+    const nodes = keys.map((k) => { const [x, y] = pos.get(k), nm = keyName(k), left = x < cx - 4, right = x > cx + 4;
+      return `<g class="cn" data-open="${esc(k)}"><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="9"/><text x="${(x + (left ? -13 : right ? 13 : 0)).toFixed(1)}" y="${(y + (y < cy ? -13 : 20)).toFixed(1)}" text-anchor="${left ? "end" : right ? "start" : "middle"}">${esc(nm.length > 16 ? nm.slice(0, 15) + "…" : nm)}</text></g>`; }).join("");
+    return `<div class="card"><svg class="cdia" viewBox="0 0 ${Wd} ${H}" role="img" aria-label="Who supplies whom among covered companies"><defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker></defs>${lines}${nodes}</svg>
+      <div class="tk">Arrows run from supplier to buyer. Tap a company to open it.</div></div>`;
+  }
+  function chainLinksView(cos) {
+    const keys = new Set(cos.map((e) => e.key)), E = chainEdges().filter((e) => keys.has(e.from) || keys.has(e.to));
+    if (!E.length) return `<div class="card muted">No sourced links between the companies shown yet.</div>`;
+    const bySup = new Map(); for (const e of E) { if (!bySup.has(e.from)) bySup.set(e.from, []); bySup.get(e.from).push(e); }
+    const groups = [...bySup.entries()].sort((a, b) => b[1].length - a[1].length).map(([k, es]) => `<div class="card lgrp"><div class="lgh"><button class="lnk" data-open="${esc(k)}"><b>${esc(keyName(k))}</b> ›</button><span class="tk">supplies ${es.length}</span></div>
+      ${es.map((e) => `<div class="lrow"><span class="arrow">→</span><button class="lnk" data-open="${esc(e.to)}">${esc(keyName(e.to))} ›</button>${e.role ? `<span class="tk"> · ${esc(e.role)}</span>` : ""}${e.src && (e.src.url || e.src.source) ? `<div class="tk">${srcLine(e.src)}${e.src.date ? " · " + esc(e.src.date) : ""}</div>` : ""}</div>`).join("")}</div>`).join("");
+    return chainDiagram(E) + `<h3>By supplier</h3>${groups}`;
   }
   function extraSettings() {
     const ai = VS.ready && A ? `<h3 id="ai-settings">AI analyst</h3><div class="card">${aiForm("settings")}
@@ -2358,7 +2576,7 @@ Reply with ONLY this JSON, no prose, no code fences:
         <div class="srow"><button class="btn" data-act="backup">⇅ Backup and sync</button><span class="tk">${P.holdings.length} holdings on this device${P.updatedAt ? " · saved " + esc(new Date(P.updatedAt).toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" })) : ""}</span></div>
         <button class="btn danger" data-act="wipeLocal">Delete holdings, chat, theme choices and AI key from this device</button>
         <div class="tk mt6">Holdings, chat, theme choices and the AI key are AES-256-GCM encrypted with your passcode in this browser's storage. 🔒 Lock now clears them from memory.</div></div>` : "";
-    const th = `<h3>Dashboard themes</h3>` + (VS.ready ? themeSettings() : (vaultGate() || `<div class="card muted">Unlock the on-device vault to change themes.</div>`));
+    const th = `<h3 id="themes-settings">Themes and areas to invest in</h3>` + (VS.ready ? themeSettings() : (vaultGate() || `<div class="card muted">Unlock the on-device vault to change themes.</div>`));
     return th + reviewSettings() + ai + pf;
   }
   // ---------- views ----------
@@ -2412,7 +2630,8 @@ Reply with ONLY this JSON, no prose, no code fences:
     Themes() {
       const t = themeId(st.theme), s = stanceOf(t); const inT = (r) => vis(ranked).filter((i) => themeId(i.theme) === t && i.role === r);
       const sec = (h, r, o) => inT(r).length ? `<h2>${h}</h2><div class="cards">${inT(r).map((i) => ideaCard(i, o)).join("")}</div>` : "";
-      return `${chips("theme", THEMES.map((x) => [x, themeName(x), vis(D.ideas).filter((i) => themeId(i.theme) === x).length]))}
+      return `<h2>Your themes</h2><p class="muted small">The themes you chose in Settings, with each one's score and top recommendations. Picks marked unscored are researched candidates, not yet scored ideas.</p>${yourThemes(false)}
+        <h2>Dashboard themes in depth</h2>${chips("theme", THEMES.map((x) => [x, themeName(x), vis(D.ideas).filter((i) => themeId(i.theme) === x).length]))}
         <h2>Theme stance</h2><div class="card"><dl class="kv"><dt>Stance</dt><dd>${pill(s.stance, STANCE_TONE[s.stance] || "neutral")}</dd>
         <dt>Why</dt><dd>${esc(s.line)}</dd><dt>What would flip it</dt><dd>${esc(s.flip)}</dd></dl></div>
         ${sec("Core ideas", "Core")}${sec("Second-order plays", "Second-order", { link: true })}${sec("Leaders near peak", "Near peak")}
@@ -2462,21 +2681,31 @@ Reply with ONLY this JSON, no prose, no code fences:
   };
 
   V["Supply chain"] = function () {
-    const id = st.chainTheme || "All";
-    const rows = vis(ranked).filter((i) => id === "All" || themeId(i.theme) === id);
-    const cards = rows.map((i) => {
-      const sc = i.supplyChain || {}, top = (sc.committed || [])[0], y = chgOver(mkt(i), RANGES["1Y"]);
-      return `<button class="card idea schcard${st.detail === keyOf(i) ? " sel" : ""}" data-open="${esc(keyOf(i))}" aria-label="Open ${esc(i.name)} supply chain">
-        <div class="row1"><div><div class="nm">${esc(i.name)} <span class="tk">${esc(i.ticker)} · ${esc(themeName(i.theme))}</span></div>
-          ${top ? `<div class="trig">${esc([top.what, top.value].filter(Boolean).join(" · "))}</div>` : `<div class="muted small">No sourced backlog or contracts yet.</div>`}</div>
-          <div class="rt"><div class="${y == null ? "tk" : y >= 0 ? "pos" : "neg"}">${y == null ? "—" : "1Y " + pct(y)}</div></div></div>
-        <div class="cat">${(sc.inTalks || []).length ? (sc.inTalks.length + " in talks") : "No talks logged"} · ${(sc.customers || []).length} customers · ${(sc.suppliers || []).length} suppliers <span class="chev">›</span></div></button>`;
-    }).join("");
-    return `<h2>Supply chain</h2>
-      <p class="muted small">Signed contracts, talks, opportunity size and growth, only where a source is recorded. Share-price returns come from this build's market data. A dash or an empty section means we do not have a source, not that the figure is zero.</p>
-      ${chips("chainTheme", [["All", "All", vis(ranked).length], ...THEMES.map((x) => [x, themeName(x), vis(D.ideas).filter((i) => themeId(i.theme) === x).length])])}
-      <div class="cards">${cards || `<div class="card muted">No ideas match the current filters.</div>`}</div>`;
+    const all = chainCos(), sel = selSet();
+    const tagOk = (e) => st.scTag === "All" || (st.scTag === "Recommended" && e.rec) || (st.scTag === "You own" && e.own) || (st.scTag === "Covered" && !e.rec && !e.own);
+    const thOk = (e) => st.chainTheme === "All" || e.cats.includes(st.chainTheme);
+    const rows = all.filter((e) => tagOk(e) && thOk(e));
+    const ths = catThemes().filter((t) => sel.has(t.id)).map((t) => [t.id, catName(t), all.filter((e) => tagOk(e) && e.cats.includes(t.id)).length]).filter((x) => x[2] > 0);
+    if (st.chainTheme !== "All" && !ths.some((x) => x[0] === st.chainTheme)) st.chainTheme = "All";
+    const cnt = (f) => all.filter(f).length;
+    return `<h2>Supply chain and customers</h2>
+      <p class="muted small">Every recommended idea and everything you own: who each company is in talks with, what is signed, how big the opportunity is, its customers and suppliers, concentration risk and stock growth. Every fact links to its source and date; an empty section says “No source yet” rather than guessing. Names in blue are covered companies: tap to follow the chain.</p>
+      ${chips("scTag", [["All", "All", all.length], ["Recommended", "Recommended", cnt((e) => e.rec)], ["You own", "You own", cnt((e) => e.own)], ["Covered", "Covered only", cnt((e) => !e.rec && !e.own)]])}
+      ${ths.length ? `<div class="slbl">Theme</div>${chips("chainTheme", [["All", "All themes"], ...ths])}` : ""}
+      ${chips("scMode", [["Companies", "Companies"], ["Links", "How they connect"]])}
+      ${!VS.ready || !P || !P.holdings.length ? `<div class="muted small">“You own” uses the holdings on this device${VS.ready ? " (none imported yet; Portfolio › Import)" : " once the vault is open"}, plus holdings you have told New Bot about.</div>` : ""}
+      ${st.scMode === "Links" ? chainLinksView(rows) : `<div class="cards">${rows.map(chainCard).join("") || `<div class="card muted">No companies match these filters.</div>`}</div>`}`;
   };
+  function supplyDetail(e) {
+    const back = splitOn() ? "" : `<button class="back" data-act="back">‹ Back</button>`;
+    const head = `<div class="card dh1"><div class="row1"><div><h2 class="dname">${esc(e.name)}</h2><div class="tk">${esc([e.ticker, e.listing].filter(Boolean).join(" · "))}${e.cats.length ? " · " + esc(e.cats.map((c) => catName(catById(c))).filter(Boolean).slice(0, 3).join(", ")) : ""}</div>
+      <div class="tags mt6">${tagPills(e)}${e.kind === "idea" ? pill(e.i.action, ACTION_TONE[e.i.action]) : e.pick ? pill(e.pick.rating || "Watch", ACTION_TONE[e.pick.rating] || "neutral") + `<span class="tk"> not yet scored</span>` : ""}</div></div>
+      ${e.kind === "idea" ? `<div class="score big">${fmt(score10(e.i))}<div class="tk">/10</div></div>` : ""}</div>
+      <div class="dacts">${e.kind === "idea" ? `<button class="btn" data-act="openIdea" data-k="${esc(e.key)}">Full idea: chart, scores, thesis ›</button><button class="btn ask" data-act="ask" data-k="${esc(e.key)}"><span aria-hidden="true">✦</span> Ask the analyst</button>` : ""}</div></div>`;
+    const pk = e.pick ? `<h3>Why it is on the list</h3><div class="card"><div>${esc(e.pick.why || "")}</div><div class="tk">${srcLine(e.pick)}${e.pick.date ? " · " + esc(e.pick.date) : ""}</div><div class="tk mt6">A researched pick, not yet a scored dashboard idea. Ask New Bot to score it before acting.</div></div>` : "";
+    const hold = e.holding ? `<div class="note">You hold this, but the dashboard doesn't cover it yet. Ask New Bot in chat to research its supply chain.</div>` : "";
+    return `${back}${head}${e.kind === "idea" ? positionCard(e.i) : ""}${hold}${pk}<h3>Supply chain and customers</h3><div class="card schain">${chainBody(e)}</div>`;
+  }
   V.Portfolio = portfolioMain;
   V.Brief = briefView;
   V.Analyst = analystView;
@@ -2505,7 +2734,10 @@ Reply with ONLY this JSON, no prose, no code fences:
     const wl = FACTORS.map((f) => `${f.short} ${W[f.key]}%`).join(", ");
     $("#asof").textContent = "As of " + D.asOf;
     const q = st.q.trim();
-    let det = st.detail ? D.ideas.find((i) => keyOf(i) === st.detail) : null;
+    const chainMode = () => st.view === "Supply chain" && !q;
+    const resolve = (k) => { if (!k) return null; if (k.startsWith("co:") || chainMode()) { const e = entOf(k); return e ? { ent: e } : null; } const i = D.ideas.find((x) => keyOf(x) === k); return i ? { i } : null; };
+    const show = (r) => r.ent ? supplyDetail(r.ent) : detail(r.i);
+    let det = resolve(st.detail);
     document.body.classList.toggle("v-analyst", st.view === "Analyst" && !q);
     if (st.view === "Analyst" && !q) {
       $("#view").innerHTML = V.Analyst(); document.body.classList.remove("split-mode");
@@ -2521,19 +2753,20 @@ Reply with ONLY this JSON, no prose, no code fences:
       const pfMode = st.view === "Portfolio" && !q;
       const listHtml = head + body() + foot;
       $("#view").innerHTML = `<div class="split${pfMode ? " pfsplit" : ""}"><div class="listpane">${listHtml}</div><aside class="detailpane" aria-label="${pfMode && !st.detail ? "Portfolio exposure" : "Idea detail"}"></aside></div>`;
-      const k = selKey(); det = k ? D.ideas.find((i) => keyOf(i) === k) : null;
+      const k = selKey(); det = resolve(k);
       if (det && !st.detail) document.querySelectorAll(`.listpane .idea[data-open="${CSS.escape(k)}"]`).forEach((x) => x.classList.add("sel"));
       if (pfMode && det) document.querySelectorAll(`.listpane .hold[data-open="${CSS.escape(k)}"]`).forEach((x) => x.classList.add("sel"));
-      $(".detailpane").innerHTML = pfMode ? (det ? `<button class="back" data-act="closeDetail">‹ Portfolio overview</button>` + detail(det) : portfolioSide())
-        : det ? detail(det) : `<div class="card muted">No idea selected. Pick one from the list.</div>`;
-      const pane = $(".detailpane"); pane.dataset.k = det ? keyOf(det) : ""; if (det && prevKey === keyOf(det)) pane.scrollTop = prevTop;
+      $(".detailpane").innerHTML = pfMode ? (det ? `<button class="back" data-act="closeDetail">‹ Portfolio overview</button>` + show(det) : portfolioSide())
+        : det ? show(det) : `<div class="card muted">No idea selected. Pick one from the list.</div>`;
+      const pane = $(".detailpane"); pane.dataset.k = det ? k : ""; if (det && prevKey === k) pane.scrollTop = prevTop;
     } else {
-      $("#view").innerHTML = det ? detail(det) + `<div class="note mt12"><b>Research, not regulated financial advice.</b> As of ${esc(D.asOf)}.</div>`
+      $("#view").innerHTML = det ? show(det) + `<div class="note mt12"><b>Research, not regulated financial advice.</b> As of ${esc(D.asOf)}.</div>`
         : head + body() + (st.view === "Settings" || st.view === "Brief" ? "" : foot);
     }
     document.querySelectorAll("[data-w]").forEach((el) => { el.style.width = el.dataset.w + "%"; });
     document.querySelectorAll("#view [data-l]").forEach((el) => { el.style.left = el.dataset.l + "%"; });
     if (st.view === "Brief" && !q && !det) afterBrief(); else navDot();
+    if (st.view === "Settings" && !q && st.catQ) filterCat();
     if (sheetKind === "pos" || sheetKind === "week" || (sheetKind === "aiReview" && !RV.busy)) paintSheet();
     document.querySelectorAll("#tabs [data-tab]").forEach((b) => b.classList.toggle("on", b.dataset.tab === st.view));
     $("#tabs [data-more]").classList.toggle("on", OVERFLOW.includes(st.view));
